@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geo-map-exp-extractor"
+version = "0.1.0"
+description = "Template-driven visual table extraction from scanned geologic map explanation images."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "TBD" }]
+dependencies = [
+    "openai>=2.0.0",
+    "pydantic>=2.0.0",
+    "PyYAML>=6.0.0",
+    "Pillow>=10.0.0",
+    "python-dotenv>=1.0.0",
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+]
+
+[project.scripts]
+geo-map-exp-extractor = "geo_map_exp_extractor.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,23 @@
+id: water_production
+name: Water production properties
+
+task_label: explanation of water production properties
+
+fields:
+  - MapUnit
+  - Properties
+  - Lithology
+  - List of Geologic Formations
+  - Description
+
+include_intro_footnotes: true
+preserve_wording: true
+normalize_line_breaks: true
+normalize_hyphenated_line_breaks: true
+
+special_instructions:
+  - If an introduction, explanation, footnote, or other descriptive text exists, transcribe it separately in a row of the table in the Description field.
+  - Use visual interpretation, not simple OCR.
+  - Preserve geologic symbols, formation lists, punctuation, and wording as closely as possible.
+  - Join broken line wraps into readable paragraphs.
+  - Leave fields blank when they do not apply.
