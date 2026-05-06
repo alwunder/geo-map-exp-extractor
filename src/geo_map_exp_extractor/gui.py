@@ -39,8 +39,8 @@ class ReviewWorkbench(tk.Tk):
         self.geometry("1200x800")
 
         self.image_path = tk.StringVar()
-        self.profile_path = tk.StringVar(value=str(self._default_profile_path()))
-        self.output_dir = tk.StringVar(value=str(Path.cwd() / "review_runs"))
+        self.profile_path = tk.StringVar(value=self._display_path(self._default_profile_path()))
+        self.output_dir = tk.StringVar(value=self._display_path(Path.cwd() / "review_runs"))
         self.model = tk.StringVar(value=DEFAULT_MODEL)
         self.status = tk.StringVar(value="Choose an image, profile, and output folder.")
 
@@ -59,6 +59,11 @@ class ReviewWorkbench(tk.Tk):
         profiles = self._profiles_dir()
         choices = sorted(profiles.glob("*.yml")) + sorted(profiles.glob("*.yaml"))
         return choices[0] if choices else profiles
+
+    def _display_path(self, path: str | Path) -> str:
+        """Format paths consistently for UI display across operating systems."""
+
+        return Path(path).as_posix()
 
     def _profiles_dir(self) -> Path:
         repo_profiles = Path(__file__).resolve().parents[2] / "profiles"
@@ -100,13 +105,17 @@ class ReviewWorkbench(tk.Tk):
         ttk.Button(controls, text="Fit 100%", command=lambda: self._set_zoom(1.0)).pack(
             side=tk.LEFT
         )
-        self.canvas = tk.Canvas(preview_frame, background="#222222")
-        x_scroll = ttk.Scrollbar(preview_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
-        y_scroll = ttk.Scrollbar(preview_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        canvas_frame = ttk.Frame(preview_frame)
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
+        self.canvas = tk.Canvas(canvas_frame, background="#222222")
+        x_scroll = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
+        y_scroll = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=self.canvas.yview)
         self.canvas.configure(xscrollcommand=x_scroll.set, yscrollcommand=y_scroll.set)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        x_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        canvas_frame.rowconfigure(0, weight=1)
+        canvas_frame.columnconfigure(0, weight=1)
         paned.add(preview_frame, weight=1)
 
         right = ttk.Frame(paned)
@@ -147,14 +156,14 @@ class ReviewWorkbench(tk.Tk):
         profiles = sorted(self._profiles_dir().glob("*.yml")) + sorted(
             self._profiles_dir().glob("*.yaml")
         )
-        self.profile_combo["values"] = [str(path) for path in profiles]
+        self.profile_combo["values"] = [self._display_path(path) for path in profiles]
 
     def _browse_image(self) -> None:
         path = filedialog.askopenfilename(
             filetypes=[("Images", "*.png *.jpg *.jpeg *.tif *.tiff *.bmp"), ("All files", "*.*")]
         )
         if path:
-            self.image_path.set(path)
+            self.image_path.set(self._display_path(path))
             self._load_preview(Path(path))
 
     def _browse_profile(self) -> None:
@@ -163,13 +172,13 @@ class ReviewWorkbench(tk.Tk):
             filetypes=[("YAML", "*.yml *.yaml"), ("All files", "*.*")],
         )
         if path:
-            self.profile_path.set(path)
+            self.profile_path.set(self._display_path(path))
             self._configure_table(load_profile(path).fields, [])
 
     def _browse_output(self) -> None:
         path = filedialog.askdirectory()
         if path:
-            self.output_dir.set(path)
+            self.output_dir.set(self._display_path(path))
 
     def _run_extraction(self) -> None:
         try:
