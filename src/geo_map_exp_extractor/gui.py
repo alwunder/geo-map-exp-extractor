@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
 
 from PIL import Image, ImageTk
@@ -20,6 +20,7 @@ if __package__ is None or __package__ == "":
         sys.path.insert(0, str(src_root))
 
 from geo_map_exp_extractor.config import load_profile
+from geo_map_exp_extractor.env_utils import load_env_from_candidates
 from geo_map_exp_extractor.jobs import (
     ExtractionJobResult,
     build_feedback_record,
@@ -37,12 +38,14 @@ class ReviewWorkbench(tk.Tk):
         super().__init__()
         self.title("Geo Image Extract Review Workbench")
         self.geometry("1200x800")
+        self._load_environment()
 
         self.image_path = tk.StringVar()
         self.profile_path = tk.StringVar(value=self._display_path(self._default_profile_path()))
-        self.output_dir = tk.StringVar(value=self._display_path(Path.cwd() / "review_runs"))
+        self.output_dir = tk.StringVar(value=self._display_path(self._repo_root() / "outputs"))
+        self.api_key_override: str | None = None
         self.model = tk.StringVar(value=DEFAULT_MODEL)
-        self.status = tk.StringVar(value="Choose an image, profile, and output folder.")
+        self.status = tk.StringVar(value=self._api_key_status_message())
 
         self.result: ExtractionJobResult | None = None
         self.rows: list[dict[str, Any]] = []
@@ -66,8 +69,67 @@ class ReviewWorkbench(tk.Tk):
         return Path(path).as_posix()
 
     def _profiles_dir(self) -> Path:
-        repo_profiles = Path(__file__).resolve().parents[2] / "profiles"
+        repo_profiles = self._repo_root() / "profiles"
         return repo_profiles if repo_profiles.exists() else Path.cwd() / "profiles"
+
+    def _repo_root(self) -> Path:
+        """Return repository root for stable default paths."""
+
+        return Path(__file__).resolve().parents[2]
+
+    def _load_environment(self) -> None:
+        """Load .env values so OPENAI_API_KEY works in GUI launches."""
+
+        load_env_from_candidates([Path.cwd() / ".env", self._repo_root() / ".env"])
+
+    def _is_valid_api_key_value(self, value: str | None) -> bool:
+        """Basic sanity check for API-key-like values."""
+
+        if not value:
+            return False
+        normalized = value.strip()
+        if not normalized:
+            return False
+        placeholders = {"your_real_key_here", "your_api_key_here", "openai_api_key"}
+        return normalized.lower() not in placeholders
+
+    def _resolve_api_key_source(self) -> tuple[str | None, str]:
+        """Return active API key and its source label."""
+
+        if self._is_valid_api_key_value(self.api_key_override):
+            return self.api_key_override, "session override"
+        env_key = os.environ.get("OPENAI_API_KEY")
+        if self._is_valid_api_key_value(env_key):
+            return env_key, ".env / environment"
+        return None, "not found"
+
+    def _api_key_status_message(self) -> str:
+        """Build an API-key status message for the footer status bar."""
+
+        _, source = self._resolve_api_key_source()
+        if source == "not found":
+            return "No API key loaded. Add OPENAI_API_KEY to .env or use 'Set API key...'."
+        return f"API key loaded from {source}. Choose an image, profile, and output folder."
+
+    def _prompt_api_key_override(self) -> None:
+        """Prompt for an optional session-only API key."""
+
+        value = simpledialog.askstring(
+            "Set API Key",
+            "Enter an OpenAI API key for this GUI session.",
+            show="*",
+            parent=self,
+        )
+        if value is None:
+            return
+        self.api_key_override = value.strip() or None
+        self.status.set(self._api_key_status_message())
+
+    def _clear_api_key_override(self) -> None:
+        """Clear session override and fall back to .env/environment key."""
+
+        self.api_key_override = None
+        self.status.set(self._api_key_status_message())
 
     def _build_widgets(self) -> None:
         top = ttk.Frame(self, padding=8)
@@ -79,14 +141,20 @@ class ReviewWorkbench(tk.Tk):
 
         ttk.Label(top, text="Model").grid(row=3, column=0, sticky="w", padx=(0, 4), pady=2)
         ttk.Entry(top, textvariable=self.model, width=44).grid(row=3, column=1, sticky="we", pady=2)
-        ttk.Button(top, text="Run extraction", command=self._run_extraction).grid(
+        ttk.Button(top, text="Set API key...", command=self._prompt_api_key_override).grid(
             row=3, column=2, padx=4
         )
-        ttk.Button(top, text="Save corrected", command=self._save_corrected).grid(
+        ttk.Button(top, text="Use .env key", command=self._clear_api_key_override).grid(
             row=3, column=3, padx=4
         )
+        ttk.Button(top, text="Run extraction", command=self._run_extraction).grid(
+            row=4, column=2, padx=4
+        )
+        ttk.Button(top, text="Save corrected", command=self._save_corrected).grid(
+            row=4, column=3, padx=4
+        )
         ttk.Button(top, text="Open output folder", command=self._open_output_folder).grid(
-            row=3, column=4, padx=4
+            row=4, column=4, padx=4
         )
         top.columnconfigure(1, weight=1)
 
@@ -181,6 +249,14 @@ class ReviewWorkbench(tk.Tk):
             self.output_dir.set(self._display_path(path))
 
     def _run_extraction(self) -> None:
+        active_key, _ = self._resolve_api_key_source()
+        if active_key is None:
+            self.status.set(self._api_key_status_message())
+            messagebox.showerror(
+                "Missing API key",
+                "No API key loaded. Add OPENAI_API_KEY to .env or use 'Set API key...'.",
+            )
+            return
         try:
             self.status.set("Running extraction...")
             self.update_idletasks()
@@ -188,6 +264,7 @@ class ReviewWorkbench(tk.Tk):
                 image_path=self.image_path.get(),
                 profile_path=self.profile_path.get(),
                 output_dir=self.output_dir.get(),
+                api_key=self.api_key_override,
                 model=self.model.get(),
             )
             self.rows = [dict(row) for row in self.result.rows]
@@ -199,7 +276,8 @@ class ReviewWorkbench(tk.Tk):
             self.notes.insert(
                 "1.0", Path(self.result.output_paths["notes"]).read_text(encoding="utf-8")
             )
-            self.status.set(f"Run complete: {self.result.run_dir}")
+            _, key_source = self._resolve_api_key_source()
+            self.status.set(f"Run complete: {self.result.run_dir} (API key: {key_source})")
         except Exception as exc:  # noqa: BLE001 - GUI should report unexpected failures to the user.
             self.status.set(f"Extraction failed: {exc}")
             messagebox.showerror("Extraction failed", str(exc))

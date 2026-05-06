@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from geo_map_exp_extractor.config import ExtractionProfile
+from geo_map_exp_extractor.env_utils import load_env_from_candidates
 from geo_map_exp_extractor.image_io import image_to_data_url
 from geo_map_exp_extractor.schema_builder import build_text_format
 
@@ -94,6 +95,19 @@ def _build_openai_client(api_key: str) -> Any:
     return OpenAI(api_key=api_key)
 
 
+def _resolve_api_key(explicit_api_key: str | None) -> str | None:
+    """Resolve API key from explicit input or environment, loading .env when needed."""
+
+    if explicit_api_key:
+        return explicit_api_key
+    key = os.environ.get("OPENAI_API_KEY")
+    if key:
+        return key
+    repo_env = Path(__file__).resolve().parents[2] / ".env"
+    load_env_from_candidates([Path.cwd() / ".env", repo_env])
+    return os.environ.get("OPENAI_API_KEY")
+
+
 def run_extraction(
     *,
     image_path: str | Path,
@@ -104,9 +118,13 @@ def run_extraction(
 ) -> ExtractionResult:
     """Send an image and prompt to the OpenAI Responses API and validate the output."""
 
-    resolved_api_key = api_key or os.environ.get("OPENAI_API_KEY")
+    resolved_api_key = _resolve_api_key(api_key)
     if not resolved_api_key:
-        msg = "OPENAI_API_KEY must be set to run extraction"
+        msg = (
+            "OPENAI_API_KEY must be set to run extraction. "
+            "Set it in your environment, add it to a .env file, "
+            "or provide it with the GUI 'Set API key...' action."
+        )
         raise RuntimeError(msg)
 
     client = _build_openai_client(resolved_api_key)
