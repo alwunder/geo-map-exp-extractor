@@ -13,6 +13,12 @@ from geo_map_exp_extractor.config import ExtractionProfile
 from geo_map_exp_extractor.image_io import ImageMetadata
 
 
+def _portable_path(path: str | Path) -> str:
+    """Return a stable, forward-slash path string for JSON metadata."""
+
+    return Path(path).as_posix()
+
+
 def write_csv(rows: list[dict[str, Any]], fields: list[str], output_path: str | Path) -> Path:
     """Write extracted rows to CSV preserving the profile field order exactly."""
 
@@ -70,16 +76,16 @@ def build_manifest(
 
     created_at = timestamp or datetime.now(timezone.utc).isoformat()
     return {
-        "input_image_path": str(image_metadata.path),
+        "input_image_path": _portable_path(image_metadata.path),
         "input_image_dimensions": {
             "width": image_metadata.width,
             "height": image_metadata.height,
         },
-        "profile_path": str(Path(profile_path)),
+        "profile_path": _portable_path(profile_path),
         "profile_id": profile.id,
         "model": model,
         "timestamp": created_at,
-        "output_file_paths": {key: str(path) for key, path in output_paths.items()},
+        "output_file_paths": {key: _portable_path(path) for key, path in output_paths.items()},
         "package_version": __version__,
     }
 

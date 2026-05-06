@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from geo_map_exp_extractor.config import ExtractionProfile
@@ -84,6 +83,17 @@ def response_to_dict(response: Any) -> dict[str, Any]:
     return json.loads(json.dumps(response, default=str))
 
 
+def _build_openai_client(api_key: str) -> Any:
+    """Construct an OpenAI client with a clear runtime error if SDK is unavailable."""
+
+    try:
+        from openai import OpenAI  # Local import keeps non-API code paths importable.
+    except ImportError as exc:  # pragma: no cover - depends on environment package set.
+        msg = "OpenAI SDK is required to run extraction, but it is not available in this environment."
+        raise RuntimeError(msg) from exc
+    return OpenAI(api_key=api_key)
+
+
 def run_extraction(
     *,
     image_path: str | Path,
@@ -99,7 +109,7 @@ def run_extraction(
         msg = "OPENAI_API_KEY must be set to run extraction"
         raise RuntimeError(msg)
 
-    client = OpenAI(api_key=resolved_api_key)
+    client = _build_openai_client(resolved_api_key)
     response = client.responses.create(
         model=model,
         input=[

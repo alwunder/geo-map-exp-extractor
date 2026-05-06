@@ -5,12 +5,19 @@ from __future__ import annotations
 import os
 import platform
 import subprocess
+import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from PIL import Image, ImageTk
+
+# Support running this file directly (e.g., IDE "Run file") in a src-layout project.
+if __package__ is None or __package__ == "":
+    src_root = Path(__file__).resolve().parents[1]
+    if str(src_root) not in sys.path:
+        sys.path.insert(0, str(src_root))
 
 from geo_map_exp_extractor.config import load_profile
 from geo_map_exp_extractor.jobs import (
