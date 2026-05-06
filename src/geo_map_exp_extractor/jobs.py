@@ -170,6 +170,7 @@ def run_extraction_job(
     image_path: str | Path,
     profile_path: str | Path,
     output_dir: str | Path,
+    api_key: str | None = None,
     model: str = DEFAULT_MODEL,
     prompt_template_path: str | Path | None = None,
     extraction_runner: ExtractionRunner = run_extraction,
@@ -198,7 +199,15 @@ def run_extraction_job(
         Path(prompt_template_path) if prompt_template_path else _default_prompt_template_path()
     )
     prompt = build_prompt(profile, prompt_template)
-    result = extraction_runner(image_path=image, prompt=prompt, profile=profile, model=model)
+    runner_kwargs: dict[str, Any] = {
+        "image_path": image,
+        "prompt": prompt,
+        "profile": profile,
+        "model": model,
+    }
+    if api_key:
+        runner_kwargs["api_key"] = api_key
+    result = extraction_runner(**runner_kwargs)
     rows = result.data["rows"]
     fields = profile.fields
 
