@@ -126,3 +126,42 @@ Start with unit tests for:
 - manifest writing
 
 Integration tests against the OpenAI API should be optional and skipped unless an API key is present.
+
+## GUI review workflow
+
+A lightweight Tkinter workbench is available for running one extraction at a time and reviewing the returned rows before publishing corrected outputs.
+
+Launch it with:
+
+```bash
+geo-image-extract-gui
+```
+
+The review workflow is:
+
+1. Browse to a source geologic-map explanation image.
+2. Choose one of the YAML profiles from `profiles/`.
+3. Choose an output folder for review runs.
+4. Run extraction. The GUI calls the reusable extraction job layer (`run_extraction_job`) rather than constructing prompts, calling OpenAI, or writing extraction sidecars directly.
+5. Review the image in the scrollable, zoomable preview pane.
+6. Double-click extracted table cells to edit values. The table columns are generated dynamically from the selected profile fields.
+7. Add reviewer notes in the notes area.
+8. Save corrected outputs and, if needed, open the timestamped run folder from the GUI.
+
+Each run creates a timestamped folder containing:
+
+```text
+source_image.<ext>
+profile.yml
+prompt.txt
+raw_response.json
+extracted.csv
+extracted.json
+corrected.csv
+corrected.json
+manifest.json
+notes.md
+feedback.jsonl
+```
+
+`manifest.json` records the run id, timestamp, original image path, image dimensions, profile id and field order, model name, output paths, and package version when available. `feedback.jsonl` stores one JSON object per edited cell or saved note with the run id, row index, field name, original value, corrected value, status, and comment so later workflow improvements can learn from reviewer corrections.
