@@ -17,10 +17,14 @@ env/
 
 # Secrets
 .env
+.env.*
+!.env.example
 
 # Local outputs
 output/
 outputs/
+review_runs/
+.cache/
 *.raw.json
 *.prompt.txt
 *.manifest.json
