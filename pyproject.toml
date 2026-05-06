@@ -29,6 +29,7 @@ dev = [
 geo-map-exp-extractor = "geo_map_exp_extractor.cli:app"
 geo-image-extract-gui = "geo_map_exp_extractor.gui:main"
 
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
