@@ -24,11 +24,13 @@ from geo_map_exp_extractor.env_utils import load_env_from_candidates
 from geo_map_exp_extractor.jobs import (
     ExtractionJobResult,
     build_feedback_record,
+    promote_corrected_to_gold,
     run_extraction_job,
     write_corrected_outputs,
     write_feedback_jsonl,
 )
 from geo_map_exp_extractor.openai_runner import DEFAULT_MODEL
+from geo_map_exp_extractor.settings import DEFAULT_IMAGE_DETAIL
 
 
 class ReviewWorkbench(tk.Tk):
@@ -45,6 +47,11 @@ class ReviewWorkbench(tk.Tk):
         self.output_dir = tk.StringVar(value=self._display_path(self._repo_root() / "outputs"))
         self.api_key_override: str | None = None
         self.model = tk.StringVar(value=DEFAULT_MODEL)
+        self.image_detail = tk.StringVar(value=DEFAULT_IMAGE_DETAIL)
+        self.include_profile_notes = tk.BooleanVar(value=False)
+        self.dry_run = tk.BooleanVar(value=False)
+        self.force_rerun = tk.BooleanVar(value=False)
+        self.segmented_mode = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value=self._api_key_status_message())
 
         self.result: ExtractionJobResult | None = None
@@ -141,20 +148,43 @@ class ReviewWorkbench(tk.Tk):
 
         ttk.Label(top, text="Model").grid(row=3, column=0, sticky="w", padx=(0, 4), pady=2)
         ttk.Entry(top, textvariable=self.model, width=44).grid(row=3, column=1, sticky="we", pady=2)
+        ttk.Label(top, text="Detail").grid(row=3, column=2, sticky="e", padx=(8, 4), pady=2)
+        ttk.Combobox(
+            top,
+            textvariable=self.image_detail,
+            values=("high", "auto", "low"),
+            width=8,
+            state="readonly",
+        ).grid(row=3, column=3, sticky="w", pady=2)
         ttk.Button(top, text="Set API key...", command=self._prompt_api_key_override).grid(
-            row=3, column=2, padx=4
+            row=3, column=4, padx=4
         )
         ttk.Button(top, text="Use .env key", command=self._clear_api_key_override).grid(
-            row=3, column=3, padx=4
+            row=3, column=5, padx=4
+        )
+        ttk.Checkbutton(top, text="Include profile notes", variable=self.include_profile_notes).grid(
+            row=4, column=1, sticky="w", pady=2
+        )
+        ttk.Checkbutton(top, text="Dry run (no API call)", variable=self.dry_run).grid(
+            row=4, column=2, sticky="w", pady=2
+        )
+        ttk.Checkbutton(top, text="Force rerun", variable=self.force_rerun).grid(
+            row=4, column=3, sticky="w", pady=2
+        )
+        ttk.Checkbutton(top, text="Segmented mode (higher cost)", variable=self.segmented_mode).grid(
+            row=4, column=4, sticky="w", pady=2
         )
         ttk.Button(top, text="Run extraction", command=self._run_extraction).grid(
-            row=4, column=2, padx=4
+            row=5, column=2, padx=4
         )
         ttk.Button(top, text="Save corrected", command=self._save_corrected).grid(
-            row=4, column=3, padx=4
+            row=5, column=3, padx=4
+        )
+        ttk.Button(top, text="Promote corrected", command=self._promote_corrected).grid(
+            row=5, column=4, padx=4
         )
         ttk.Button(top, text="Open output folder", command=self._open_output_folder).grid(
-            row=4, column=4, padx=4
+            row=5, column=5, padx=4
         )
         top.columnconfigure(1, weight=1)
 
@@ -250,15 +280,46 @@ class ReviewWorkbench(tk.Tk):
 
     def _run_extraction(self) -> None:
         active_key, _ = self._resolve_api_key_source()
-        if active_key is None:
+        if not self.dry_run.get() and active_key is None:
             self.status.set(self._api_key_status_message())
             messagebox.showerror(
                 "Missing API key",
                 "No API key loaded. Add OPENAI_API_KEY to .env or use 'Set API key...'.",
             )
             return
+        image_candidate = Path(self.image_path.get())
+        if image_candidate.is_dir():
+            proceed = messagebox.askyesno(
+                "Folder selected",
+                (
+                    "The selected path is a folder. GUI default mode is one image at a time.\n\n"
+                    "Continue anyway? (The run will fail unless you choose a single file.)"
+                ),
+            )
+            if not proceed:
+                self.status.set("Folder run cancelled. Choose a single image file.")
+                return
+        if not self.dry_run.get():
+            proceed = messagebox.askyesno(
+                "Confirm API call",
+                "This operation will send 1 image and one prompt to the OpenAI API. "
+                "This may incur API charges.\n\nContinue?",
+            )
+            if not proceed:
+                self.status.set("Extraction cancelled before API call.")
+                return
+            if self.segmented_mode.get():
+                seg_proceed = messagebox.askyesno(
+                    "Segmented mode enabled",
+                    "Segmented mode can issue multiple API calls and increase cost.\n\nContinue?",
+                )
+                if not seg_proceed:
+                    self.status.set("Segmented extraction cancelled.")
+                    return
         try:
-            self.status.set("Running extraction...")
+            self.status.set(
+                "Running dry run..." if self.dry_run.get() else "Running extraction via OpenAI API..."
+            )
             self.update_idletasks()
             self.result = run_extraction_job(
                 image_path=self.image_path.get(),
@@ -266,6 +327,11 @@ class ReviewWorkbench(tk.Tk):
                 output_dir=self.output_dir.get(),
                 api_key=self.api_key_override,
                 model=self.model.get(),
+                image_detail=self.image_detail.get(),
+                include_profile_notes=self.include_profile_notes.get(),
+                dry_run=self.dry_run.get(),
+                force_rerun=self.force_rerun.get(),
+                segmented_mode=self.segmented_mode.get(),
             )
             self.rows = [dict(row) for row in self.result.rows]
             self.original_rows = [dict(row) for row in self.result.rows]
@@ -276,8 +342,22 @@ class ReviewWorkbench(tk.Tk):
             self.notes.insert(
                 "1.0", Path(self.result.output_paths["notes"]).read_text(encoding="utf-8")
             )
-            _, key_source = self._resolve_api_key_source()
-            self.status.set(f"Run complete: {self.result.run_dir} (API key: {key_source})")
+            usage = self.result.usage
+            summary_bits = [
+                f"run: {self.result.run_id}",
+                "dry-run" if self.result.dry_run else ("cache reuse" if self.result.cache_reused else "fresh API call"),
+                f"rough image tokens: {self.result.rough_image_tokens}",
+            ]
+            if not self.result.dry_run:
+                summary_bits.append(
+                    "usage input/output/total: "
+                    f"{usage.get('input_tokens')}/{usage.get('output_tokens')}/{usage.get('total_tokens')}"
+                )
+                summary_bits.append(
+                    "est cost USD: "
+                    f"{self.result.estimated_cost_usd if self.result.estimated_cost_usd is not None else 'n/a'}"
+                )
+            self.status.set(" | ".join(summary_bits))
         except Exception as exc:  # noqa: BLE001 - GUI should report unexpected failures to the user.
             self.status.set(f"Extraction failed: {exc}")
             messagebox.showerror("Extraction failed", str(exc))
@@ -386,6 +466,26 @@ class ReviewWorkbench(tk.Tk):
         )
         write_feedback_jsonl(records, self.result.output_paths["feedback"])
         self.status.set(f"Saved corrected outputs in {self.result.run_dir}")
+
+    def _promote_corrected(self) -> None:
+        if self.result is None:
+            messagebox.showinfo("No run", "Run extraction before promoting corrected outputs.")
+            return
+        corrected_csv = self.result.output_paths["corrected_csv"]
+        corrected_json = self.result.output_paths["corrected_json"]
+        if not corrected_csv.exists() or not corrected_json.exists():
+            messagebox.showinfo(
+                "No corrected outputs",
+                "Save corrected outputs first, then promote them.",
+            )
+            return
+        target = promote_corrected_to_gold(
+            run_id=self.result.run_id,
+            profile_id=self.result.manifest["profile_id"],
+            corrected_json_path=corrected_json,
+            corrected_csv_path=corrected_csv,
+        )
+        self.status.set(f"Promoted corrected outputs to {target}")
 
     def _open_output_folder(self) -> None:
         path = self.result.run_dir if self.result else Path(self.output_dir.get())

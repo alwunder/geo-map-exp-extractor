@@ -11,11 +11,15 @@ from geo_map_exp_extractor.jobs import (
     write_corrected_outputs,
     write_feedback_jsonl,
 )
-from geo_map_exp_extractor.openai_runner import ExtractionResult
+from geo_map_exp_extractor.openai_runner import (
+    ExtractionResult,
+    ExtractionValidationError,
+    UsageSummary,
+)
 
 
 def _make_image(path: Path) -> None:
-    Image.new("RGB", (16, 8), color="white").save(path)
+    Image.new("RGB", (1600, 1200), color="white").save(path)
 
 
 def _fake_runner(**_: object) -> ExtractionResult:
@@ -40,11 +44,21 @@ def _fake_runner(**_: object) -> ExtractionResult:
             "notes": ["one note"],
             "warnings": [],
         },
-        raw_response={"id": "resp_test", "output_text": "{}"},
+        raw_response={
+            "id": "resp_test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "total_tokens": 1200,
+                "input_tokens_details": {"cached_tokens": 100},
+            },
+        },
+        usage=UsageSummary(input_tokens=1000, output_tokens=200, total_tokens=1200, cached_tokens=100),
     )
 
 
-def test_run_extraction_job_creates_timestamped_run_folder(tmp_path: Path) -> None:
+def test_run_extraction_job_creates_timestamped_run_folder(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("geo_map_exp_extractor.jobs._cache_root", lambda: tmp_path / ".cache")
     image_path = tmp_path / "source.png"
     _make_image(image_path)
 
@@ -61,13 +75,13 @@ def test_run_extraction_job_creates_timestamped_run_folder(tmp_path: Path) -> No
     assert result.run_dir.is_dir()
     expected_files = {
         "source_image.png",
+        "processed_api_image.png",
         "profile.yml",
         "prompt.txt",
+        "schema.json",
         "raw_response.json",
         "extracted.csv",
         "extracted.json",
-        "corrected.csv",
-        "corrected.json",
         "manifest.json",
         "notes.md",
         "feedback.jsonl",
@@ -75,7 +89,8 @@ def test_run_extraction_job_creates_timestamped_run_folder(tmp_path: Path) -> No
     assert expected_files == {path.name for path in result.run_dir.iterdir()}
 
 
-def test_run_extraction_job_writes_manifest(tmp_path: Path) -> None:
+def test_run_extraction_job_writes_manifest(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("geo_map_exp_extractor.jobs._cache_root", lambda: tmp_path / ".cache")
     image_path = tmp_path / "source.png"
     _make_image(image_path)
 
@@ -83,7 +98,7 @@ def test_run_extraction_job_writes_manifest(tmp_path: Path) -> None:
         image_path=image_path,
         profile_path=Path("profiles/water_production.yml"),
         output_dir=tmp_path / "runs",
-        model="test-model",
+        model="gpt-4o-mini",
         extraction_runner=_fake_runner,
         timestamp=datetime(2026, 5, 6, 12, 30, tzinfo=timezone.utc),
     )
@@ -91,13 +106,132 @@ def test_run_extraction_job_writes_manifest(tmp_path: Path) -> None:
     manifest = json.loads((result.run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["run_id"] == "20260506T123000Z"
     assert manifest["timestamp"] == "2026-05-06T12:30:00+00:00"
-    assert manifest["image_path"] == str(image_path)
-    assert manifest["image_dimensions"] == {"width": 16, "height": 8}
+    assert manifest["source_image_path"] == image_path.as_posix()
+    assert manifest["original_image_dimensions"] == {"width": 1600, "height": 1200}
     assert manifest["profile_id"] == "water_production"
     assert manifest["profile_fields"] == result.fields
-    assert manifest["model"] == "test-model"
-    assert manifest["output_paths"]["corrected_csv"].endswith("corrected.csv")
+    assert manifest["model"] == "gpt-4o-mini"
+    assert manifest["image_detail"] == "high"
+    assert manifest["api_call_mode"] == "fresh_api_call"
+    assert manifest["input_tokens"] == 1000
+    assert manifest["output_tokens"] == 200
+    assert manifest["total_tokens"] == 1200
+    assert manifest["cached_tokens"] == 100
+    assert manifest["estimated_cost_usd"] is not None
     assert "package_version" in manifest
+
+
+def test_run_extraction_job_dry_run_skips_api_call(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("geo_map_exp_extractor.jobs._cache_root", lambda: tmp_path / ".cache")
+    image_path = tmp_path / "source.png"
+    _make_image(image_path)
+
+    calls = {"count": 0}
+
+    def _never_call_runner(**_: object) -> ExtractionResult:
+        calls["count"] += 1
+        raise AssertionError("API runner should not be invoked during dry run")
+
+    result = run_extraction_job(
+        image_path=image_path,
+        profile_path=Path("profiles/water_production.yml"),
+        output_dir=tmp_path / "runs",
+        model="test-model",
+        extraction_runner=_never_call_runner,
+        dry_run=True,
+    )
+
+    assert calls["count"] == 0
+    assert result.dry_run is True
+    assert result.rows == []
+    assert not result.output_paths["raw_response"].exists()
+    assert not result.output_paths["extracted_csv"].exists()
+    assert result.rough_image_tokens > 0
+
+
+def test_run_extraction_job_reuses_cache(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("geo_map_exp_extractor.jobs._cache_root", lambda: tmp_path / ".cache")
+    image_path = tmp_path / "source.png"
+    _make_image(image_path)
+
+    calls = {"count": 0}
+
+    def _counting_runner(**_: object) -> ExtractionResult:
+        calls["count"] += 1
+        return _fake_runner()
+
+    first = run_extraction_job(
+        image_path=image_path,
+        profile_path=Path("profiles/water_production.yml"),
+        output_dir=tmp_path / "runs",
+        model="cache-model",
+        extraction_runner=_counting_runner,
+    )
+    second = run_extraction_job(
+        image_path=image_path,
+        profile_path=Path("profiles/water_production.yml"),
+        output_dir=tmp_path / "runs",
+        model="cache-model",
+        extraction_runner=_counting_runner,
+    )
+
+    assert calls["count"] == 1
+    assert first.cache_reused is False
+    assert second.cache_reused is True
+    assert second.rows == first.rows
+
+
+def test_request_fingerprint_changes_with_detail_setting(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("geo_map_exp_extractor.jobs._cache_root", lambda: tmp_path / ".cache")
+    image_path = tmp_path / "source.png"
+    _make_image(image_path)
+
+    high = run_extraction_job(
+        image_path=image_path,
+        profile_path=Path("profiles/water_production.yml"),
+        output_dir=tmp_path / "runs",
+        model="hash-model",
+        extraction_runner=_fake_runner,
+        dry_run=True,
+        image_detail="high",
+    )
+    low = run_extraction_job(
+        image_path=image_path,
+        profile_path=Path("profiles/water_production.yml"),
+        output_dir=tmp_path / "runs",
+        model="hash-model",
+        extraction_runner=_fake_runner,
+        dry_run=True,
+        image_detail="low",
+    )
+
+    assert high.request_fingerprint != low.request_fingerprint
+
+
+def test_validation_failures_preserve_raw_response(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("geo_map_exp_extractor.jobs._cache_root", lambda: tmp_path / ".cache")
+    image_path = tmp_path / "source.png"
+    _make_image(image_path)
+
+    def _invalid_runner(**_: object) -> ExtractionResult:
+        raise ExtractionValidationError("bad schema", {"id": "raw-failure", "output_text": "bad"})
+
+    try:
+        run_extraction_job(
+            image_path=image_path,
+            profile_path=Path("profiles/water_production.yml"),
+            output_dir=tmp_path / "runs",
+            model="test-model",
+            extraction_runner=_invalid_runner,
+        )
+        raise AssertionError("expected RuntimeError for structured validation failure")
+    except RuntimeError:
+        run_folders = sorted((tmp_path / "runs").iterdir())
+        latest = run_folders[-1]
+        raw_path = latest / "raw_response.json"
+        assert raw_path.exists()
+        loaded = json.loads(raw_path.read_text(encoding="utf-8"))
+        assert loaded["id"] == "raw-failure"
 
 
 def test_write_corrected_outputs_writes_json_and_csv(tmp_path: Path) -> None:

@@ -2,166 +2,172 @@
 
 Template-driven visual table extraction from scanned geologic map explanation images.
 
-This project is intended to extract structured tables from scanned geologic map panels using a vision-capable OpenAI model. It is **not** primarily an OCR project. OCR may be added later as an optional quality-control aid, but the core workflow should rely on visual interpretation of headings, symbol boxes, lithology labels, formation lists, wrapped paragraphs, footnotes, and row groupings.
+The project is built around deliberate, auditable OpenAI API usage. It is not a bulk OCR utility and does not auto-learn by rewriting prompts.
 
-## Initial goals
+## API key and billing
 
-Build a Python package and CLI that can:
+- Set `OPENAI_API_KEY` in your shell environment or in a repo-local `.env` file.
+- Do not store keys in `.env.example`; that file is a template only.
+- API billing is separate from ChatGPT subscriptions.
+- The app never logs or writes your API key to run artifacts.
 
-1. Accept an image path, extraction profile, and output path.
-2. Read a YAML profile that defines the extraction task and output fields.
-3. Build a prompt from a reusable prompt template.
-4. Build a strict JSON Schema dynamically from the profile field list.
-5. Send the prompt and image to the OpenAI Responses API.
-6. Receive structured JSON containing fields, rows, notes, and warnings.
-7. Export the rows to CSV using the exact field order from the profile.
-8. Save sidecar files for reproducibility:
-   - raw JSON response
-   - final prompt text
-   - manifest JSON
-9. Support future segmented-image mode for tall scanned panels.
+Example `.env`:
 
-## Why profiles?
-
-Each extraction type should be controlled by a profile rather than hard-coded in Python. A profile defines the task label, output columns, and special transcription rules.
-
-Example profiles included:
-
-- `profiles/engineering_properties.yml`
-- `profiles/water_production.yml`
-- `profiles/stratigraphic_column.yml`
-
-## Intended CLI
-
-```bash
-geo-map-exp-extractor \
-  --image input/water_properties.png \
-  --profile profiles/water_production.yml \
-  --out output/water_properties.csv
+```env
+OPENAI_API_KEY=your_real_key_here
 ```
 
-Optional future command:
+## Installation
 
-```bash
-geo-map-exp-extractor \
-  --image input/page.png \
-  --task-label "explanation of engineering properties" \
-  --fields "MapUnit,Lithology,List of Geologic Formations,Description" \
-  --out output/engineering_properties.csv
-```
-
-## Recommended output files
-
-For an output CSV named `water_properties.csv`, also write:
-
-```text
-water_properties.csv
-water_properties.raw.json
-water_properties.prompt.txt
-water_properties.manifest.json
-```
-
-The manifest should include:
-
-- input image path
-- input image dimensions
-- profile path and profile id
-- model name
-- timestamp
-- output file paths
-- package version, if available
-
-## Environment setup
-
-Use Python 3.11 or newer.
+Use Python 3.11+.
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate  # Windows PowerShell/CMD style may vary
+.venv\Scripts\activate
 pip install -e .[dev]
 ```
 
-Create a `.env` file from `.env.example` and add your API key:
+## CLI usage
 
-```text
-OPENAI_API_KEY=your_api_key_here
+Single image (default safe workflow):
+
+```bash
+geo-map-exp-extractor single \
+  --image input/water_properties.png \
+  --profile profiles/water_production.yml \
+  --out-dir outputs
 ```
 
-Never commit `.env` or API keys.
+Dry run (no API call):
 
-## Planned package structure
-
-```text
-src/geo_map_exp_extractor/
-  __init__.py
-  cli.py
-  config.py
-  image_io.py
-  prompt_builder.py
-  schema_builder.py
-  openai_runner.py
-  exporters.py
-  qc.py
+```bash
+geo-map-exp-extractor single \
+  --image input/water_properties.png \
+  --profile profiles/water_production.yml \
+  --out-dir outputs \
+  --dry-run
 ```
 
-## Design rules
+Batch mode (explicit confirmation required unless `--yes`):
 
-- Preserve wording and punctuation as closely as possible.
-- Normalize broken line wraps into readable paragraphs.
-- Normalize obvious line-break hyphenation.
-- Leave non-applicable fields blank.
-- Do not invent missing values.
-- Put introduction, explanation, footnote, and descriptive standalone text into separate rows when the profile requests it.
-- Preserve geologic symbols and formation abbreviations.
-- Keep the output schema strict and predictable.
+```bash
+geo-map-exp-extractor batch \
+  --image-dir input/ \
+  --pattern "*.png" \
+  --profile profiles/water_production.yml \
+  --out-dir outputs
+```
 
-## Testing expectations
+## GUI usage
 
-Start with unit tests for:
-
-- profile loading
-- prompt building
-- dynamic JSON Schema generation
-- CSV export
-- manifest writing
-
-Integration tests against the OpenAI API should be optional and skipped unless an API key is present.
-
-## GUI review workflow
-
-A lightweight Tkinter workbench is available for running one extraction at a time and reviewing the returned rows before publishing corrected outputs.
-
-Launch it with:
+Launch:
 
 ```bash
 geo-image-extract-gui
 ```
 
-The review workflow is:
+GUI defaults to one image at a time. Before API runs it shows a charge warning and confirms the call.
 
-1. Browse to a source geologic-map explanation image.
-2. Choose one of the YAML profiles from `profiles/`.
-3. Choose an output folder for review runs.
-4. Run extraction. The GUI calls the reusable extraction job layer (`run_extraction_job`) rather than constructing prompts, calling OpenAI, or writing extraction sidecars directly.
-5. Review the image in the scrollable, zoomable preview pane.
-6. Double-click extracted table cells to edit values. The table columns are generated dynamically from the selected profile fields.
-7. Add reviewer notes in the notes area.
-8. Save corrected outputs and, if needed, open the timestamped run folder from the GUI.
+Key options:
 
-Each run creates a timestamped folder containing:
+- `Dry run (no API call)`
+- `Force rerun` (ignore cache)
+- `Detail` (`high` default, configurable)
+- `Include profile notes`
+
+You can edit extracted cells locally and save corrected outputs without triggering another model call.
+
+## Request safety and efficiency
+
+Before API execution, the app:
+
+1. Loads and validates profile.
+2. Builds final prompt and strict JSON schema.
+3. Prepares image (conversion/resizing only when needed).
+4. Computes request fingerprint using:
+   - processed image hash
+   - selected profile and field order
+   - final prompt hash
+   - model name
+   - image detail setting
+   - schema version
+
+If the same fingerprint already exists in cache, the app reuses cached data unless rerun is forced.
+
+## Image preparation policy
+
+- Accepts common source formats.
+- Converts unsupported formats locally before API submission.
+- Converts TIFF/PDF pages to API-friendly images (first page/frame).
+- Resizes only when necessary to avoid oversized payloads while preserving readability.
+- Uses `high` detail by default for map/explanation panels.
+
+## Run folders and audit trail
+
+Each run creates a timestamped folder under `outputs/` with:
 
 ```text
 source_image.<ext>
+processed_api_image.<ext>
 profile.yml
 prompt.txt
-raw_response.json
-extracted.csv
-extracted.json
-corrected.csv
-corrected.json
+schema.json
+raw_response.json            # omitted for dry run
+extracted.json               # omitted for dry run
+extracted.csv                # omitted for dry run
+corrected.json               # written after review save
+corrected.csv                # written after review save
+feedback.jsonl
 manifest.json
 notes.md
-feedback.jsonl
+segments/                    # when segmented mode is enabled
 ```
 
-`manifest.json` records the run id, timestamp, original image path, image dimensions, profile id and field order, model name, output paths, and package version when available. `feedback.jsonl` stores one JSON object per edited cell or saved note with the run id, row index, field name, original value, corrected value, status, and comment so later workflow improvements can learn from reviewer corrections.
+`manifest.json` includes run metadata, hashes, model/detail settings, request fingerprint, fresh-vs-cache mode, usage tokens (when available), estimated cost (when pricing is configured), and output paths.
+
+## Cost awareness
+
+Model pricing is manually configurable in:
+
+- `src/geo_map_exp_extractor/pricing.py`
+
+Post-run cost estimation is based on actual usage fields returned by the API (`input_tokens`, `output_tokens`, `cached_tokens` when present). Pre-run image token numbers are rough estimates only.
+
+## Review/correction workflow
+
+- Manual edits do not call the API.
+- `Save corrected` writes `corrected.csv`, `corrected.json`, and `feedback.jsonl`.
+- `feedback.jsonl` records row index, field name, old value, new value, status, and optional comment.
+- `Promote corrected` copies corrected outputs to `examples/gold/<profile_id>/` for future testing.
+
+## Profile improvement loop
+
+- Profiles stay in `profiles/*.yml`.
+- Optional notes file support: `profiles/<profile>.notes.md`.
+- Notes are included in prompts only when enabled (`--include-profile-notes` or GUI checkbox).
+- Corrections are stored for human review; prompts/profiles are updated intentionally, not automatically.
+
+## Segmentation policy
+
+- Segmentation is not the default.
+- If enabled programmatically, segments are created with overlap and each call is logged separately.
+- Segmented mode can increase cost because it makes multiple API calls.
+
+## Recommended workflow
+
+1. Dry run.
+2. Single extraction.
+3. Review/edit.
+4. Save corrections.
+5. Promote good examples to `examples/gold/`.
+6. Only then run confirmed batch processing.
+
+## Testing
+
+Run tests:
+
+```bash
+python -m pytest
+```
+
+Unit tests cover hashing/caching behavior, dry-run no-call behavior, manifest content, cost estimation, corrected output writing, and feedback JSONL writing with mocked extraction runners.

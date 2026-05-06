@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from geo_map_exp_extractor.config import ExtractionProfile
+from geo_map_exp_extractor.settings import SCHEMA_VERSION
 
 JsonSchema = dict[str, Any]
 
@@ -59,5 +60,6 @@ def build_text_format(profile: ExtractionProfile) -> JsonSchema:
         "name": f"{profile.id}_extraction",
         "description": f"Structured extraction output for {profile.name}.",
         "strict": True,
+        "schema_version": SCHEMA_VERSION,
         "schema": build_response_schema(profile),
     }
