@@ -19,5 +19,5 @@ normalize_hyphenated_line_breaks: true
 special_instructions:
   - Interpret the visual grouping of the stratigraphic column to determine which text belongs to each map unit.
   - FullName should include the group name when visually indicated.
-  - Preserve descriptive text as closely as possible.
+  - Literally transcribe descriptive text. Unreadable text should be indicated.
   - Leave fields blank when they do not apply or are not visible.

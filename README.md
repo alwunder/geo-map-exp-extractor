@@ -75,6 +75,26 @@ Key options:
 - `Detail` (`high` default, configurable)
 - `Include profile notes`
 
+Preview canvas tools:
+
+- `Zoom -` / `Zoom +`: step zoom out/in.
+- `Fit 100%`: show image at 1:1 scale.
+- `Zoom Extents`: fit full image inside the current canvas viewport.
+- `Zoom Width`: fit image to viewport width for top-to-bottom review.
+- Left-click and drag on the image to pan.
+
+Results table editing:
+
+- `Row height`: increase or decrease visible row height while keeping panel size fixed.
+- Double-click any table cell to open a multiline editor.
+- `OK` applies the edit to the table.
+- `Cancel` discards the edit.
+- `Save corrected` writes table and notes edits to corrected outputs (no API call).
+
+Help:
+
+- `Help` opens this `README.md` inside the app.
+
 You can edit extracted cells locally and save corrected outputs without triggering another model call.
 
 ## Request safety and efficiency

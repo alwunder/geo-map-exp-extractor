@@ -18,6 +18,6 @@ normalize_hyphenated_line_breaks: true
 special_instructions:
   - If an introduction, explanation, footnote, or other descriptive text exists, transcribe it separately in a row of the table in the Description field.
   - Use visual interpretation, not simple OCR.
-  - Preserve geologic symbols, formation lists, punctuation, and wording as closely as possible.
+  - Literally transcribe geologic symbols, formation lists, punctuation, and wording/text. Unreadable text should be indicated.
   - Join broken line wraps into readable paragraphs.
   - Leave fields blank when they do not apply.

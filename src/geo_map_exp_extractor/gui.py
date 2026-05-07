@@ -6,12 +6,15 @@ import os
 import platform
 import subprocess
 import sys
+import textwrap
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
+from tkinter import font as tkfont
 from typing import Any
 
 from PIL import Image, ImageTk
+from arcgis.apps.storymap import collection
 
 # Support running this file directly (e.g., IDE "Run file") in a src-layout project.
 if __package__ is None or __package__ == "":
@@ -61,6 +64,10 @@ class ReviewWorkbench(tk.Tk):
         self.zoom = 1.0
         self.source_image: Image.Image | None = None
         self.preview_photo: ImageTk.PhotoImage | None = None
+        self.preview_source_path: Path | None = None
+        self.row_height = tk.IntVar(value=72)
+        self.table_style_name = "Results.Treeview"
+        self._is_panning = False
 
         self._build_widgets()
         self._refresh_profiles()
@@ -140,52 +147,54 @@ class ReviewWorkbench(tk.Tk):
 
     def _build_widgets(self) -> None:
         top = ttk.Frame(self, padding=8)
-        top.pack(side=tk.TOP, fill=tk.X)
+        top.pack(side=tk.TOP, anchor=tk.NW)
 
-        self._path_row(top, "Image", self.image_path, self._browse_image, row=0)
+        self._path_row(top, "Image:", self.image_path, self._browse_image, row=0)
         self._profile_row(top, row=1)
-        self._path_row(top, "Output", self.output_dir, self._browse_output, row=2)
+        self._path_row(top, "Output:", self.output_dir, self._browse_output, row=2)
 
-        ttk.Label(top, text="Model").grid(row=3, column=0, sticky="w", padx=(0, 4), pady=2)
-        ttk.Entry(top, textvariable=self.model, width=44).grid(row=3, column=1, sticky="we", pady=2)
-        ttk.Label(top, text="Detail").grid(row=3, column=2, sticky="e", padx=(8, 4), pady=2)
+        ttk.Label(top, text="Model:").grid(row=3, column=0, sticky="w", padx=(0, 4), pady=2)
+        ttk.Entry(top, textvariable=self.model).grid(row=3, column=1, columnspan=2, sticky="we", pady=2)
+        ttk.Label(top, text="Detail:").grid(row=4, column=1, sticky="e", padx=(0, 2), pady=2)
         ttk.Combobox(
             top,
             textvariable=self.image_detail,
             values=("high", "auto", "low"),
             width=8,
             state="readonly",
-        ).grid(row=3, column=3, sticky="w", pady=2)
+        ).grid(row=4, column=2, sticky="w", padx=2, pady=2)
         ttk.Button(top, text="Set API key...", command=self._prompt_api_key_override).grid(
-            row=3, column=4, padx=4
+            row=3, column=9, padx=0, ipadx=4
         )
-        ttk.Button(top, text="Use .env key", command=self._clear_api_key_override).grid(
-            row=3, column=5, padx=4
-        )
+        """ttk.Button(top, text="Use .env key", command=self._clear_api_key_override).grid(
+            row=3, column=5, padx=4, ipadx=4
+        )"""
         ttk.Checkbutton(top, text="Include profile notes", variable=self.include_profile_notes).grid(
-            row=4, column=1, sticky="w", pady=2
+            row=5, column=1, columnspan=2, sticky="w", pady=2
         )
+        ttk.Label(top, text="Model options:").grid(row=3, column=3, sticky="e", padx=(20, 0), pady=2)
         ttk.Checkbutton(top, text="Dry run (no API call)", variable=self.dry_run).grid(
-            row=4, column=2, sticky="w", pady=2
+            row=3, column=4, sticky="w", pady=2, padx=4
         )
         ttk.Checkbutton(top, text="Force rerun", variable=self.force_rerun).grid(
-            row=4, column=3, sticky="w", pady=2
+            row=3, column=5, sticky="w", pady=2, padx=4
         )
         ttk.Checkbutton(top, text="Segmented mode (higher cost)", variable=self.segmented_mode).grid(
-            row=4, column=4, sticky="w", pady=2
+            row=3, column=6, sticky="w", pady=2, padx=(4,50)
         )
         ttk.Button(top, text="Run extraction", command=self._run_extraction).grid(
-            row=5, column=2, padx=4
-        )
-        ttk.Button(top, text="Save corrected", command=self._save_corrected).grid(
-            row=5, column=3, padx=4
-        )
-        ttk.Button(top, text="Promote corrected", command=self._promote_corrected).grid(
-            row=5, column=4, padx=4
+            row=5, column=4, sticky="we", padx=4, ipadx=4
         )
         ttk.Button(top, text="Open output folder", command=self._open_output_folder).grid(
-            row=5, column=5, padx=4
+            row=5, column=6, columnspan=2, sticky="e", padx=4
         )
+        ttk.Button(top, text="Save corrected", command=self._save_corrected).grid(
+            row=5, column=8, padx=4
+        )
+        ttk.Button(top, text="Promote corrected", command=self._promote_corrected).grid(
+            row=5, column=9, padx=4
+        )
+        ttk.Button(top, text="Help", command=self._show_help).grid(row=0, column=9, padx=4)
         top.columnconfigure(1, weight=1)
 
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -200,15 +209,20 @@ class ReviewWorkbench(tk.Tk):
         ttk.Button(controls, text="Zoom +", command=lambda: self._set_zoom(self.zoom * 1.25)).pack(
             side=tk.LEFT
         )
-        ttk.Button(controls, text="Fit 100%", command=lambda: self._set_zoom(1.0)).pack(
+        ttk.Button(controls, text="100%", command=lambda: self._set_zoom(1.0)).pack(
             side=tk.LEFT
         )
+        ttk.Button(controls, text="Zoom Width", command=self._zoom_width).pack(side=tk.LEFT)
+        ttk.Button(controls, text="Zoom Extents", command=self._zoom_extents).pack(side=tk.LEFT)
         canvas_frame = ttk.Frame(preview_frame)
         canvas_frame.pack(fill=tk.BOTH, expand=True)
-        self.canvas = tk.Canvas(canvas_frame, background="#222222")
+        self.canvas = tk.Canvas(canvas_frame, background="#222222", cursor="")
         x_scroll = ttk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
         y_scroll = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=self.canvas.yview)
         self.canvas.configure(xscrollcommand=x_scroll.set, yscrollcommand=y_scroll.set)
+        self.canvas.bind("<ButtonPress-1>", self._start_pan)
+        self.canvas.bind("<B1-Motion>", self._pan_image)
+        self.canvas.bind("<ButtonRelease-1>", self._end_pan)
         self.canvas.grid(row=0, column=0, sticky="nsew")
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
@@ -217,18 +231,47 @@ class ReviewWorkbench(tk.Tk):
         paned.add(preview_frame, weight=1)
 
         right = ttk.Frame(paned)
-        self.table = ttk.Treeview(right, show="headings")
-        self.table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.table.bind("<Double-1>", self._begin_cell_edit)
-        table_y = ttk.Scrollbar(right, orient=tk.VERTICAL, command=self.table.yview)
-        table_x = ttk.Scrollbar(right, orient=tk.HORIZONTAL, command=self.table.xview)
-        self.table.configure(yscrollcommand=table_y.set, xscrollcommand=table_x.set)
-        table_y.pack(side=tk.RIGHT, fill=tk.Y)
-        table_x.pack(side=tk.TOP, fill=tk.X)
+        right.rowconfigure(1, weight=1)
+        right.columnconfigure(0, weight=1)
+        table_controls = ttk.Frame(right)
+        table_controls.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        ttk.Label(table_controls, text="Row height").pack(side=tk.LEFT)
+        row_height_spinbox = ttk.Spinbox(
+            table_controls,
+            from_=24,
+            to=220,
+            increment=4,
+            textvariable=self.row_height,
+            width=5,
+            command=self._on_row_height_change,
+        )
+        row_height_spinbox.pack(side=tk.LEFT, padx=(4, 0))
+        row_height_spinbox.bind("<Return>", self._on_row_height_change)
+        row_height_spinbox.bind("<FocusOut>", self._on_row_height_change)
 
-        ttk.Label(right, text="Notes").pack(anchor="w", pady=(8, 0))
+        style = ttk.Style(self)
+        style.configure(self.table_style_name, rowheight=self.row_height.get())
+        table_frame = ttk.Frame(right)
+        table_frame.grid(row=1, column=0, sticky="nsew")
+        table_frame.grid_propagate(False)
+        self.table = ttk.Treeview(table_frame, show="headings", style=self.table_style_name)
+        self.table.bind("<Double-1>", self._begin_cell_edit)
+        self.table.bind("<Configure>", self._refresh_table_display)
+        self.table.bind("<ButtonRelease-1>", self._refresh_table_display)
+        self.table.bind("<MouseWheel>", self._on_table_mousewheel)
+        self.table.bind("<Shift-MouseWheel>", self._on_table_shift_mousewheel)
+        table_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.table.yview)
+        table_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.table.xview)
+        self.table.configure(yscrollcommand=table_y.set, xscrollcommand=table_x.set)
+        self.table.grid(row=0, column=0, sticky="nsew")
+        table_y.grid(row=0, column=1, sticky="ns")
+        table_x.grid(row=1, column=0, sticky="ew")
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(right, text="Notes").grid(row=2, column=0, sticky="w", pady=(8, 0))
         self.notes = tk.Text(right, height=6, wrap=tk.WORD)
-        self.notes.pack(fill=tk.X)
+        self.notes.grid(row=3, column=0, sticky="ew")
         paned.add(right, weight=1)
 
         status_frame = ttk.Frame(self, padding=(8, 4))
@@ -239,15 +282,15 @@ class ReviewWorkbench(tk.Tk):
         self, parent: ttk.Frame, label: str, variable: tk.StringVar, command: Any, row: int
     ) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 4), pady=2)
-        ttk.Entry(parent, textvariable=variable).grid(row=row, column=1, sticky="we", pady=2)
-        ttk.Button(parent, text="Browse", command=command).grid(row=row, column=2, padx=4)
+        ttk.Entry(parent, textvariable=variable, width=120).grid(row=row, column=1, columnspan=7, sticky="we", pady=2)
+        ttk.Button(parent, text="Browse...", command=command).grid(row=row, column=8, padx=4)
 
     def _profile_row(self, parent: ttk.Frame, row: int) -> None:
-        ttk.Label(parent, text="Profile").grid(row=row, column=0, sticky="w", padx=(0, 4), pady=2)
+        ttk.Label(parent, text="Profile:").grid(row=row, column=0, sticky="w", padx=(0, 4), pady=2)
         self.profile_combo = ttk.Combobox(parent, textvariable=self.profile_path)
-        self.profile_combo.grid(row=row, column=1, sticky="we", pady=2)
-        ttk.Button(parent, text="Browse", command=self._browse_profile).grid(
-            row=row, column=2, padx=4
+        self.profile_combo.grid(row=row, column=1, columnspan=7, sticky="we", pady=2)
+        ttk.Button(parent, text="Browse...", command=self._browse_profile).grid(
+            row=row, column=8, padx=4
         )
 
     def _refresh_profiles(self) -> None:
@@ -336,7 +379,9 @@ class ReviewWorkbench(tk.Tk):
             self.rows = [dict(row) for row in self.result.rows]
             self.original_rows = [dict(row) for row in self.result.rows]
             self.feedback_records = []
-            self._load_preview(Path(self.image_path.get()))
+            image_path = Path(self.image_path.get())
+            if self.preview_source_path is None or image_path.resolve() != self.preview_source_path:
+                self._load_preview(image_path)
             self._configure_table(self.result.fields, self.rows)
             self.notes.delete("1.0", tk.END)
             self.notes.insert(
@@ -364,7 +409,9 @@ class ReviewWorkbench(tk.Tk):
 
     def _load_preview(self, path: Path) -> None:
         self.source_image = Image.open(path)
-        self._set_zoom(self.zoom)
+        self.preview_source_path = path.resolve()
+        self.canvas.configure(cursor="hand2")
+        self._zoom_extents()
 
     def _set_zoom(self, zoom: float) -> None:
         self.zoom = max(0.1, min(zoom, 8.0))
@@ -378,6 +425,45 @@ class ReviewWorkbench(tk.Tk):
         self.canvas.create_image(0, 0, anchor="nw", image=self.preview_photo)
         self.canvas.configure(scrollregion=(0, 0, width, height))
 
+    def _zoom_extents(self) -> None:
+        if self.source_image is None:
+            return
+        self.update_idletasks()
+        canvas_width = max(1, self.canvas.winfo_width())
+        canvas_height = max(1, self.canvas.winfo_height())
+        scale_x = canvas_width / self.source_image.width
+        scale_y = canvas_height / self.source_image.height
+        self._set_zoom(min(scale_x, scale_y))
+        self.canvas.xview_moveto(0.0)
+        self.canvas.yview_moveto(0.0)
+
+    def _zoom_width(self) -> None:
+        if self.source_image is None:
+            return
+        self.update_idletasks()
+        canvas_width = max(1, self.canvas.winfo_width())
+        scale_x = canvas_width / self.source_image.width
+        self._set_zoom(scale_x)
+        self.canvas.xview_moveto(0.0)
+        self.canvas.yview_moveto(0.0)
+
+    def _start_pan(self, event: tk.Event[Any]) -> None:
+        if self.source_image is None:
+            return
+        self._is_panning = True
+        self.canvas.configure(cursor="hand2")
+        self.canvas.scan_mark(event.x, event.y)
+
+    def _pan_image(self, event: tk.Event[Any]) -> None:
+        if self.source_image is None or not self._is_panning:
+            return
+        self.canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def _end_pan(self, _: tk.Event[Any]) -> None:
+        self._is_panning = False
+        if self.source_image is not None:
+            self.canvas.configure(cursor="hand2")
+
     def _configure_table(self, fields: list[str], rows: list[dict[str, Any]]) -> None:
         self.table.delete(*self.table.get_children())
         self.table["columns"] = fields
@@ -386,8 +472,79 @@ class ReviewWorkbench(tk.Tk):
             self.table.column(field, width=max(120, min(300, len(field) * 12)), stretch=True)
         for index, row in enumerate(rows):
             self.table.insert(
-                "", tk.END, iid=str(index), values=[row.get(field, "") for field in fields]
+                "", tk.END, iid=str(index), values=[self._wrapped_cell_value(index, field) for field in fields]
             )
+        self._refresh_table_display()
+
+    def _on_row_height_change(self, _: tk.Event[Any] | None = None) -> None:
+        try:
+            value = int(self.row_height.get())
+        except (tk.TclError, ValueError):
+            return
+        value = max(24, min(value, 220))
+        self.row_height.set(value)
+        ttk.Style(self).configure(self.table_style_name, rowheight=value)
+        self._refresh_table_display()
+
+    def _on_table_mousewheel(self, event: tk.Event[Any]) -> str:
+        delta = -1 if event.delta > 0 else 1
+        self.table.yview_scroll(delta, "units")
+        return "break"
+
+    def _on_table_shift_mousewheel(self, event: tk.Event[Any]) -> str:
+        delta = -1 if event.delta > 0 else 1
+        self.table.xview_scroll(delta, "units")
+        return "break"
+
+    def _refresh_table_display(self, _: tk.Event[Any] | None = None) -> None:
+        if self.result is None:
+            return
+        fields = self.result.fields
+        for row_id in self.table.get_children():
+            row_index = int(row_id)
+            self.table.item(
+                row_id,
+                values=[self._wrapped_cell_value(row_index, field) for field in fields],
+            )
+
+    def _wrapped_cell_value(self, row_index: int, field: str) -> str:
+        raw_value = str(self.rows[row_index].get(field, ""))
+        if not raw_value:
+            return ""
+        try:
+            column_width = int(self.table.column(field, option="width"))
+        except tk.TclError:
+            return raw_value
+        if column_width <= 20:
+            return raw_value
+        available_px = max(40, column_width - 12)
+        font = tkfont.nametofont("TkDefaultFont")
+        wrapped_sections: list[str] = []
+        for section in raw_value.splitlines() or [raw_value]:
+            words = section.split()
+            if not words:
+                wrapped_sections.append("")
+                continue
+            lines: list[str] = []
+            current: list[str] = []
+            for word in words:
+                trial = " ".join(current + [word])
+                if font.measure(trial) <= available_px:
+                    current.append(word)
+                    continue
+                if current:
+                    lines.append(" ".join(current))
+                    current = [word]
+                    continue
+                # Single long token: hard-wrap by character count fallback.
+                avg_char_px = max(1, font.measure("n"))
+                width_chars = max(4, available_px // avg_char_px)
+                lines.extend(textwrap.wrap(word, width=width_chars))
+                current = []
+            if current:
+                lines.append(" ".join(current))
+            wrapped_sections.append("\n".join(lines))
+        return "\n".join(wrapped_sections)
 
     def _begin_cell_edit(self, event: tk.Event[Any]) -> None:
         if self.result is None:
@@ -404,39 +561,60 @@ class ReviewWorkbench(tk.Tk):
         bbox = self.table.bbox(row_id, column_id)
         if not bbox:
             return
-        x, y, width, height = bbox
         original = self.rows[int(row_id)].get(field, "")
-        editor = ttk.Entry(self.table)
-        editor.insert(0, str(original))
-        editor.place(x=x, y=y, width=width, height=height)
+        dialog = tk.Toplevel(self)
+        dialog.title(f"Edit row {int(row_id) + 1} | {field}")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("700x260")
+
+        editor = tk.Text(dialog, wrap=tk.WORD)
+        editor.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 4))
+        editor.insert("1.0", str(original))
         editor.focus_set()
-        committed = False
 
-        def commit(_: tk.Event[Any] | None = None) -> None:
-            nonlocal committed
-            if committed:
-                return
-            committed = True
-            corrected = editor.get()
-            editor.destroy()
+        controls = ttk.Frame(dialog)
+        controls.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        def commit() -> None:
+            corrected = editor.get("1.0", tk.END).rstrip("\n")
             row_index = int(row_id)
-            if corrected == original:
-                return
-            self.rows[row_index][field] = corrected
-            self.table.item(row_id, values=[self.rows[row_index].get(name, "") for name in fields])
-            self.feedback_records.append(
-                build_feedback_record(
-                    run_id=self.result.run_id,
-                    row_index=row_index,
-                    field_name=field,
-                    original_value=original,
-                    corrected_value=corrected,
+            if corrected != original:
+                self.rows[row_index][field] = corrected
+                self.table.item(
+                    row_id,
+                    values=[self._wrapped_cell_value(row_index, name) for name in fields],
                 )
-            )
-            self.status.set(f"Edited row {row_index + 1}, field {field}.")
+                self.feedback_records.append(
+                    build_feedback_record(
+                        run_id=self.result.run_id,
+                        row_index=row_index,
+                        field_name=field,
+                        original_value=original,
+                        corrected_value=corrected,
+                    )
+                )
+                self.status.set(f"Edited row {row_index + 1}, field {field}.")
+            dialog.destroy()
 
-        editor.bind("<Return>", commit)
-        editor.bind("<FocusOut>", commit)
+        ttk.Button(controls, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(controls, text="OK", command=commit).pack(side=tk.RIGHT)
+        dialog.bind("<Escape>", lambda _: dialog.destroy())
+        dialog.bind("<Control-Return>", lambda _: commit())
+
+    def _show_help(self) -> None:
+        help_path = self._repo_root() / "README.md"
+        if not help_path.exists():
+            messagebox.showerror("Help unavailable", f"Could not find {help_path}.")
+            return
+        help_window = tk.Toplevel(self)
+        help_window.title("Help and Workflow")
+        help_window.geometry("900x700")
+        help_window.transient(self)
+        body = scrolledtext.ScrolledText(help_window, wrap=tk.WORD)
+        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        body.insert("1.0", help_path.read_text(encoding="utf-8"))
+        body.configure(state="disabled")
 
     def _save_corrected(self) -> None:
         if self.result is None:
