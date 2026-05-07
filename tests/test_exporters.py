@@ -40,7 +40,7 @@ def test_build_and_write_manifest(tmp_path: Path) -> None:
         ),
         profile=profile,
         profile_path=Path("profiles/water_production.yml"),
-        model="chat-latest",
+        model="gpt-5.5",
         output_paths=output_paths,
         timestamp="2026-05-06T00:00:00+00:00",
     )
@@ -52,6 +52,6 @@ def test_build_and_write_manifest(tmp_path: Path) -> None:
     assert loaded["input_image_path"] == "input/water.png"
     assert loaded["input_image_dimensions"] == {"width": 1200, "height": 800}
     assert loaded["profile_id"] == "water_production"
-    assert loaded["model"] == "gpt-4o-mini"
+    assert loaded["model"] == "gpt-5.5"
     assert loaded["output_file_paths"]["csv"].endswith("water.csv")
     assert "package_version" in loaded

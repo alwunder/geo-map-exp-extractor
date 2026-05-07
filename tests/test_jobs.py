@@ -51,9 +51,16 @@ def _fake_runner(**_: object) -> ExtractionResult:
                 "output_tokens": 200,
                 "total_tokens": 1200,
                 "input_tokens_details": {"cached_tokens": 100},
+                "output_tokens_details": {"reasoning_tokens": 150},
             },
         },
-        usage=UsageSummary(input_tokens=1000, output_tokens=200, total_tokens=1200, cached_tokens=100),
+        usage=UsageSummary(
+            input_tokens=1000,
+            output_tokens=200,
+            total_tokens=1200,
+            cached_tokens=100,
+            reasoning_tokens=150,
+        ),
     )
 
 
@@ -98,7 +105,7 @@ def test_run_extraction_job_writes_manifest(tmp_path: Path, monkeypatch) -> None
         image_path=image_path,
         profile_path=Path("profiles/water_production.yml"),
         output_dir=tmp_path / "runs",
-        model="gpt-4o-mini",
+        model="gpt-5.5",
         extraction_runner=_fake_runner,
         timestamp=datetime(2026, 5, 6, 12, 30, tzinfo=timezone.utc),
     )
@@ -110,13 +117,16 @@ def test_run_extraction_job_writes_manifest(tmp_path: Path, monkeypatch) -> None
     assert manifest["original_image_dimensions"] == {"width": 1600, "height": 1200}
     assert manifest["profile_id"] == "water_production"
     assert manifest["profile_fields"] == result.fields
-    assert manifest["model"] == "gpt-4o-mini"
+    assert manifest["model"] == "gpt-5.5"
+    assert manifest["reasoning_effort"] == "medium"
     assert manifest["image_detail"] == "high"
+    assert manifest["max_output_tokens"] == 12000
     assert manifest["api_call_mode"] == "fresh_api_call"
     assert manifest["input_tokens"] == 1000
     assert manifest["output_tokens"] == 200
     assert manifest["total_tokens"] == 1200
     assert manifest["cached_tokens"] == 100
+    assert manifest["reasoning_tokens"] == 150
     assert manifest["estimated_cost_usd"] is not None
     assert "package_version" in manifest
 
@@ -206,6 +216,35 @@ def test_request_fingerprint_changes_with_detail_setting(tmp_path: Path, monkeyp
     )
 
     assert high.request_fingerprint != low.request_fingerprint
+
+
+def test_request_fingerprint_changes_with_max_output_token_limit_toggle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("geo_map_exp_extractor.jobs._cache_root", lambda: tmp_path / ".cache")
+    image_path = tmp_path / "source.png"
+    _make_image(image_path)
+
+    limited = run_extraction_job(
+        image_path=image_path,
+        profile_path=Path("profiles/water_production.yml"),
+        output_dir=tmp_path / "runs",
+        model="hash-model",
+        extraction_runner=_fake_runner,
+        dry_run=True,
+        use_max_output_tokens_limit=True,
+    )
+    unlimited = run_extraction_job(
+        image_path=image_path,
+        profile_path=Path("profiles/water_production.yml"),
+        output_dir=tmp_path / "runs",
+        model="hash-model",
+        extraction_runner=_fake_runner,
+        dry_run=True,
+        use_max_output_tokens_limit=False,
+    )
+
+    assert limited.request_fingerprint != unlimited.request_fingerprint
 
 
 def test_validation_failures_preserve_raw_response(tmp_path: Path, monkeypatch) -> None:

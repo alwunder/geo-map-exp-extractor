@@ -3,7 +3,7 @@ from geo_map_exp_extractor.pricing import estimate_cost_usd
 
 def test_estimate_cost_uses_cached_and_uncached_input_tokens() -> None:
     cost = estimate_cost_usd(
-        model="gpt-4o-mini",
+        model="gpt-5.5",
         input_tokens=1_000_000,
         output_tokens=1_000_000,
         cached_tokens=500_000,

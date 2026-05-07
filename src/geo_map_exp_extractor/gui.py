@@ -7,14 +7,15 @@ import platform
 import subprocess
 import sys
 import textwrap
+import threading
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 from tkinter import font as tkfont
 from typing import Any
 
 from PIL import Image, ImageTk
-from arcgis.apps.storymap import collection
 
 # Support running this file directly (e.g., IDE "Run file") in a src-layout project.
 if __package__ is None or __package__ == "":
@@ -32,8 +33,15 @@ from geo_map_exp_extractor.jobs import (
     write_corrected_outputs,
     write_feedback_jsonl,
 )
-from geo_map_exp_extractor.openai_runner import DEFAULT_MODEL
-from geo_map_exp_extractor.settings import DEFAULT_IMAGE_DETAIL
+from geo_map_exp_extractor.settings import (
+    DEFAULT_IMAGE_DETAIL,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT,
+    SUPPORTED_IMAGE_DETAILS,
+    SUPPORTED_MODELS,
+    SUPPORTED_REASONING_EFFORTS,
+)
 
 
 class ReviewWorkbench(tk.Tk):
@@ -41,7 +49,7 @@ class ReviewWorkbench(tk.Tk):
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("Geo Image Extract Review Workbench")
+        self.title("Geologic Map Explanation Extraction Review Workbench")
         self.geometry("1200x800")
         self._load_environment()
 
@@ -50,7 +58,10 @@ class ReviewWorkbench(tk.Tk):
         self.output_dir = tk.StringVar(value=self._display_path(self._repo_root() / "outputs"))
         self.api_key_override: str | None = None
         self.model = tk.StringVar(value=DEFAULT_MODEL)
+        self.reasoning_effort = tk.StringVar(value=DEFAULT_REASONING_EFFORT)
         self.image_detail = tk.StringVar(value=DEFAULT_IMAGE_DETAIL)
+        self.max_output_tokens = tk.IntVar(value=DEFAULT_MAX_OUTPUT_TOKENS)
+        self.use_max_output_tokens_limit = tk.BooleanVar(value=True)
         self.include_profile_notes = tk.BooleanVar(value=False)
         self.dry_run = tk.BooleanVar(value=False)
         self.force_rerun = tk.BooleanVar(value=False)
@@ -68,6 +79,12 @@ class ReviewWorkbench(tk.Tk):
         self.row_height = tk.IntVar(value=72)
         self.table_style_name = "Results.Treeview"
         self._is_panning = False
+        self._run_thread: threading.Thread | None = None
+        self._worker_result: ExtractionJobResult | None = None
+        self._worker_error: Exception | None = None
+        self._progress_dialog: tk.Toplevel | None = None
+        self._progress_elapsed = tk.StringVar(value="Elapsed: 00:00")
+        self._progress_started_at: datetime | None = None
 
         self._build_widgets()
         self._refresh_profiles()
@@ -126,18 +143,67 @@ class ReviewWorkbench(tk.Tk):
         return f"API key loaded from {source}. Choose an image, profile, and output folder."
 
     def _prompt_api_key_override(self) -> None:
-        """Prompt for an optional session-only API key."""
+        """Open API key dialog with masked entry and .env reset support."""
 
-        value = simpledialog.askstring(
-            "Set API Key",
-            "Enter an OpenAI API key for this GUI session.",
-            show="*",
-            parent=self,
-        )
-        if value is None:
-            return
-        self.api_key_override = value.strip() or None
-        self.status.set(self._api_key_status_message())
+        self._load_environment()
+        env_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+        initial_value = self.api_key_override if self.api_key_override else env_key
+        key_var = tk.StringVar(value=initial_value)
+        info_var = tk.StringVar(value="Key is hidden. Save to apply for this session.")
+        env_loaded_via_button = {"value": False}
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Set API Key")
+        dialog.geometry("560x180")
+        dialog.minsize(520, 170)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+
+        frame = ttk.Frame(dialog, padding=10)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        ttk.Label(frame, text="OpenAI API key (masked):").grid(row=0, column=0, sticky="w")
+        entry = ttk.Entry(frame, textvariable=key_var, show="*")
+        entry.grid(row=1, column=0, sticky="ew", pady=(6, 6))
+        entry.focus_set()
+        ttk.Label(frame, textvariable=info_var).grid(row=2, column=0, sticky="w")
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=3, column=0, sticky="e", pady=(10, 0))
+
+        def use_env_key() -> None:
+            self._load_environment()
+            current_env_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+            if not self._is_valid_api_key_value(current_env_key):
+                messagebox.showerror(
+                    "No valid .env key",
+                    "Could not load a valid OPENAI_API_KEY from .env/environment.",
+                    parent=dialog,
+                )
+                return
+            key_var.set(current_env_key)
+            env_loaded_via_button["value"] = True
+            info_var.set("Loaded key from .env. Click Save to reset to environment key.")
+
+        def save_key() -> None:
+            value = key_var.get().strip()
+            if env_loaded_via_button["value"] and value == (os.environ.get("OPENAI_API_KEY") or "").strip():
+                self.api_key_override = None
+            else:
+                self.api_key_override = value or None
+            self.status.set(self._api_key_status_message())
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Use .env key", command=use_env_key).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(buttons, text="Save", command=save_key).pack(side=tk.LEFT)
+
+        dialog.bind("<Escape>", lambda _: dialog.destroy())
+        dialog.bind("<Return>", lambda _: save_key())
 
     def _clear_api_key_override(self) -> None:
         """Clear session override and fall back to .env/environment key."""
@@ -154,37 +220,53 @@ class ReviewWorkbench(tk.Tk):
         self._path_row(top, "Output:", self.output_dir, self._browse_output, row=2)
 
         ttk.Label(top, text="Model:").grid(row=3, column=0, sticky="w", padx=(0, 4), pady=2)
-        ttk.Entry(top, textvariable=self.model).grid(row=3, column=1, columnspan=2, sticky="we", pady=2)
-        ttk.Label(top, text="Detail:").grid(row=4, column=1, sticky="e", padx=(0, 2), pady=2)
+        ttk.Combobox(
+            top,
+            textvariable=self.model,
+            values=SUPPORTED_MODELS,
+            state="readonly",
+        ).grid(row=3, column=1, columnspan=2, sticky="we", padx=2, pady=2)
+        ttk.Label(top, text="Reasoning effort:").grid(row=4, column=0, sticky="w", padx=(0, 4), pady=2)
+        ttk.Combobox(
+            top,
+            textvariable=self.reasoning_effort,
+            values=SUPPORTED_REASONING_EFFORTS,
+            width=8,
+            state="readonly",
+        ).grid(row=4, column=1, sticky="w", padx=2, pady=2)
+        ttk.Label(top, text="Image detail:").grid(row=5, column=0, sticky="w", padx=(0, 4), pady=2)
         ttk.Combobox(
             top,
             textvariable=self.image_detail,
-            values=("high", "auto", "low"),
+            values=SUPPORTED_IMAGE_DETAILS,
             width=8,
             state="readonly",
-        ).grid(row=4, column=2, sticky="w", padx=2, pady=2)
+        ).grid(row=5, column=1, sticky="w", padx=2, pady=2)
+        ttk.Label(top, text="Max output tokens:").grid(row=4, column=2, sticky="e", padx=(12, 2), pady=2)
+        ttk.Entry(top, textvariable=self.max_output_tokens, width=10).grid(
+            row=4, column=3, sticky="w", padx=2, pady=2
+        )
         ttk.Button(top, text="Set API key...", command=self._prompt_api_key_override).grid(
             row=3, column=9, padx=0, ipadx=4
         )
-        """ttk.Button(top, text="Use .env key", command=self._clear_api_key_override).grid(
-            row=3, column=5, padx=4, ipadx=4
-        )"""
         ttk.Checkbutton(top, text="Include profile notes", variable=self.include_profile_notes).grid(
-            row=5, column=1, columnspan=2, sticky="w", pady=2
+            row=1, column=9, sticky="w", pady=2
         )
-        ttk.Label(top, text="Model options:").grid(row=3, column=3, sticky="e", padx=(20, 0), pady=2)
+        ttk.Label(top, text="API call options:").grid(row=3, column=3, sticky="e", padx=(20, 0), pady=2)
         ttk.Checkbutton(top, text="Dry run (no API call)", variable=self.dry_run).grid(
             row=3, column=4, sticky="w", pady=2, padx=4
         )
-        ttk.Checkbutton(top, text="Force rerun", variable=self.force_rerun).grid(
+        ttk.Checkbutton(top, text="Force re-run", variable=self.force_rerun).grid(
             row=3, column=5, sticky="w", pady=2, padx=4
         )
         ttk.Checkbutton(top, text="Segmented mode (higher cost)", variable=self.segmented_mode).grid(
             row=3, column=6, sticky="w", pady=2, padx=(4,50)
         )
-        ttk.Button(top, text="Run extraction", command=self._run_extraction).grid(
-            row=5, column=4, sticky="we", padx=4, ipadx=4
+        ttk.Checkbutton(top, text="Apply output token limit", variable=self.use_max_output_tokens_limit).grid(
+            row=4, column=4, columnspan=2, sticky="w", pady=2, padx=4
         )
+        self.run_button = ttk.Button(top, text="Run extraction", command=self._run_extraction)
+        self.run_button.grid(row=5, column=4, sticky="we", padx=4, ipadx=4)
         ttk.Button(top, text="Open output folder", command=self._open_output_folder).grid(
             row=5, column=6, columnspan=2, sticky="e", padx=4
         )
@@ -298,6 +380,15 @@ class ReviewWorkbench(tk.Tk):
             self._profiles_dir().glob("*.yaml")
         )
         self.profile_combo["values"] = [self._display_path(path) for path in profiles]
+        current = Path(self.profile_path.get())
+        if current.is_file():
+            self._apply_profile_settings(load_profile(current))
+
+    def _apply_profile_settings(self, profile: Any) -> None:
+        self.model.set(profile.model)
+        self.reasoning_effort.set(profile.reasoning_effort)
+        self.image_detail.set(profile.image_detail)
+        self.max_output_tokens.set(profile.max_output_tokens)
 
     def _browse_image(self) -> None:
         path = filedialog.askopenfilename(
@@ -314,7 +405,9 @@ class ReviewWorkbench(tk.Tk):
         )
         if path:
             self.profile_path.set(self._display_path(path))
-            self._configure_table(load_profile(path).fields, [])
+            profile = load_profile(path)
+            self._apply_profile_settings(profile)
+            self._configure_table(profile.fields, [])
 
     def _browse_output(self) -> None:
         path = filedialog.askdirectory()
@@ -322,6 +415,8 @@ class ReviewWorkbench(tk.Tk):
             self.output_dir.set(self._display_path(path))
 
     def _run_extraction(self) -> None:
+        if self._run_thread is not None and self._run_thread.is_alive():
+            return
         active_key, _ = self._resolve_api_key_source()
         if not self.dry_run.get() and active_key is None:
             self.status.set(self._api_key_status_message())
@@ -360,52 +455,150 @@ class ReviewWorkbench(tk.Tk):
                     self.status.set("Segmented extraction cancelled.")
                     return
         try:
-            self.status.set(
-                "Running dry run..." if self.dry_run.get() else "Running extraction via OpenAI API..."
-            )
-            self.update_idletasks()
-            self.result = run_extraction_job(
-                image_path=self.image_path.get(),
-                profile_path=self.profile_path.get(),
-                output_dir=self.output_dir.get(),
-                api_key=self.api_key_override,
-                model=self.model.get(),
-                image_detail=self.image_detail.get(),
-                include_profile_notes=self.include_profile_notes.get(),
-                dry_run=self.dry_run.get(),
-                force_rerun=self.force_rerun.get(),
-                segmented_mode=self.segmented_mode.get(),
-            )
-            self.rows = [dict(row) for row in self.result.rows]
-            self.original_rows = [dict(row) for row in self.result.rows]
-            self.feedback_records = []
-            image_path = Path(self.image_path.get())
-            if self.preview_source_path is None or image_path.resolve() != self.preview_source_path:
-                self._load_preview(image_path)
-            self._configure_table(self.result.fields, self.rows)
-            self.notes.delete("1.0", tk.END)
-            self.notes.insert(
-                "1.0", Path(self.result.output_paths["notes"]).read_text(encoding="utf-8")
-            )
-            usage = self.result.usage
-            summary_bits = [
-                f"run: {self.result.run_id}",
-                "dry-run" if self.result.dry_run else ("cache reuse" if self.result.cache_reused else "fresh API call"),
-                f"rough image tokens: {self.result.rough_image_tokens}",
-            ]
-            if not self.result.dry_run:
-                summary_bits.append(
-                    "usage input/output/total: "
-                    f"{usage.get('input_tokens')}/{usage.get('output_tokens')}/{usage.get('total_tokens')}"
-                )
-                summary_bits.append(
-                    "est cost USD: "
-                    f"{self.result.estimated_cost_usd if self.result.estimated_cost_usd is not None else 'n/a'}"
-                )
-            self.status.set(" | ".join(summary_bits))
-        except Exception as exc:  # noqa: BLE001 - GUI should report unexpected failures to the user.
+            max_output_tokens = self.max_output_tokens.get()
+        except (tk.TclError, ValueError):
+            messagebox.showerror("Invalid max output tokens", "Max output tokens must be an integer.")
+            return
+
+        job_kwargs = {
+            "image_path": self.image_path.get(),
+            "profile_path": self.profile_path.get(),
+            "output_dir": self.output_dir.get(),
+            "api_key": self.api_key_override,
+            "model": self.model.get(),
+            "reasoning_effort": self.reasoning_effort.get(),
+            "image_detail": self.image_detail.get(),
+            "max_output_tokens": max_output_tokens,
+            "use_max_output_tokens_limit": self.use_max_output_tokens_limit.get(),
+            "include_profile_notes": self.include_profile_notes.get(),
+            "dry_run": self.dry_run.get(),
+            "force_rerun": self.force_rerun.get(),
+            "segmented_mode": self.segmented_mode.get(),
+        }
+
+        self._worker_result = None
+        self._worker_error = None
+        self._start_progress_dialog(self.dry_run.get())
+        self.run_button.configure(state=tk.DISABLED)
+        self.status.set(
+            "Running dry run..." if self.dry_run.get() else "Running extraction via OpenAI API..."
+        )
+        self._run_thread = threading.Thread(
+            target=self._run_extraction_worker,
+            kwargs=job_kwargs,
+            daemon=True,
+        )
+        self._run_thread.start()
+        self.after(150, self._poll_run_thread)
+
+    def _run_extraction_worker(self, **job_kwargs: Any) -> None:
+        try:
+            self._worker_result = run_extraction_job(**job_kwargs)
+        except Exception as exc:  # noqa: BLE001 - hand back to UI thread for display.
+            self._worker_error = exc
+
+    def _poll_run_thread(self) -> None:
+        thread = self._run_thread
+        if thread is not None and thread.is_alive():
+            self._update_progress_elapsed()
+            self.after(200, self._poll_run_thread)
+            return
+
+        self._close_progress_dialog()
+        self.run_button.configure(state=tk.NORMAL)
+        self._run_thread = None
+
+        if self._worker_error is not None:
+            exc = self._worker_error
+            self._worker_error = None
             self.status.set(f"Extraction failed: {exc}")
             messagebox.showerror("Extraction failed", str(exc))
+            return
+        if self._worker_result is None:
+            self.status.set("Extraction failed: unknown worker error")
+            messagebox.showerror("Extraction failed", "No extraction result was returned.")
+            return
+        self._apply_extraction_result(self._worker_result)
+
+    def _apply_extraction_result(self, result: ExtractionJobResult) -> None:
+        self.result = result
+        self.rows = [dict(row) for row in self.result.rows]
+        self.original_rows = [dict(row) for row in self.result.rows]
+        self.feedback_records = []
+        image_path = Path(self.image_path.get())
+        if self.preview_source_path is None or image_path.resolve() != self.preview_source_path:
+            self._load_preview(image_path)
+        self._configure_table(self.result.fields, self.rows)
+        self.notes.delete("1.0", tk.END)
+        self.notes.insert(
+            "1.0", Path(self.result.output_paths["notes"]).read_text(encoding="utf-8")
+        )
+        usage = self.result.usage
+        summary_bits = [
+            f"run: {self.result.run_id}",
+            "dry-run" if self.result.dry_run else ("cache reuse" if self.result.cache_reused else "fresh API call"),
+            f"rough image tokens: {self.result.rough_image_tokens}",
+        ]
+        if not self.result.dry_run:
+            summary_bits.append(
+                "usage input/output/total: "
+                f"{usage.get('input_tokens')}/{usage.get('output_tokens')}/{usage.get('total_tokens')}"
+            )
+            summary_bits.append(f"reasoning tokens: {usage.get('reasoning_tokens')}")
+            summary_bits.append(
+                "est cost USD: "
+                f"{self.result.estimated_cost_usd if self.result.estimated_cost_usd is not None else 'n/a'}"
+            )
+            if self.result.warnings:
+                summary_bits.append("warnings present")
+        self.status.set(" | ".join(summary_bits))
+        if self.result.warnings:
+            messagebox.showwarning("Extraction warning", "\n\n".join(self.result.warnings))
+
+    def _start_progress_dialog(self, is_dry_run: bool) -> None:
+        self._close_progress_dialog()
+        dialog = tk.Toplevel(self)
+        dialog.title("Running extraction")
+        dialog.geometry("460x160")
+        dialog.minsize(420, 150)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(
+            frame,
+            text="Preparing dry run..." if is_dry_run else "Calling OpenAI API and validating output...",
+            anchor="w",
+        ).pack(fill=tk.X)
+        progress = ttk.Progressbar(frame, mode="indeterminate")
+        progress.pack(fill=tk.X, pady=(10, 8))
+        progress.start(14)
+        ttk.Label(frame, textvariable=self._progress_elapsed, anchor="w").pack(fill=tk.X)
+
+        self._progress_dialog = dialog
+        self._progress_started_at = datetime.now()
+        self._progress_elapsed.set("Elapsed: 00:00")
+
+    def _update_progress_elapsed(self) -> None:
+        if self._progress_dialog is None or self._progress_started_at is None:
+            return
+        seconds = int((datetime.now() - self._progress_started_at).total_seconds())
+        minutes = seconds // 60
+        rem = seconds % 60
+        self._progress_elapsed.set(f"Elapsed: {minutes:02d}:{rem:02d}")
+
+    def _close_progress_dialog(self) -> None:
+        if self._progress_dialog is None:
+            return
+        try:
+            self._progress_dialog.grab_release()
+        except tk.TclError:
+            pass
+        self._progress_dialog.destroy()
+        self._progress_dialog = None
+        self._progress_started_at = None
 
     def _load_preview(self, path: Path) -> None:
         self.source_image = Image.open(path)
@@ -566,15 +759,18 @@ class ReviewWorkbench(tk.Tk):
         dialog.title(f"Edit row {int(row_id) + 1} | {field}")
         dialog.transient(self)
         dialog.grab_set()
-        dialog.geometry("700x260")
+        dialog.geometry("760x360")
+        dialog.minsize(560, 260)
+        dialog.rowconfigure(0, weight=1)
+        dialog.columnconfigure(0, weight=1)
 
         editor = tk.Text(dialog, wrap=tk.WORD)
-        editor.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 4))
+        editor.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 4))
         editor.insert("1.0", str(original))
         editor.focus_set()
 
         controls = ttk.Frame(dialog)
-        controls.pack(fill=tk.X, padx=8, pady=(0, 8))
+        controls.grid(row=1, column=0, sticky="e", padx=8, pady=(0, 8))
 
         def commit() -> None:
             corrected = editor.get("1.0", tk.END).rstrip("\n")
@@ -597,8 +793,8 @@ class ReviewWorkbench(tk.Tk):
                 self.status.set(f"Edited row {row_index + 1}, field {field}.")
             dialog.destroy()
 
-        ttk.Button(controls, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=(4, 0))
         ttk.Button(controls, text="OK", command=commit).pack(side=tk.RIGHT)
+        ttk.Button(controls, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=(4, 0))
         dialog.bind("<Escape>", lambda _: dialog.destroy())
         dialog.bind("<Control-Return>", lambda _: commit())
 

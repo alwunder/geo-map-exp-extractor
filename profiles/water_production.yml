@@ -2,6 +2,10 @@ id: water_production
 name: Water production properties
 
 task_label: explanation of water production properties
+model: gpt-5.5
+reasoning_effort: medium
+image_detail: high
+max_output_tokens: 12000
 
 fields:
   - MapUnit

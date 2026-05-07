@@ -10,8 +10,9 @@ from rich.console import Console
 
 from geo_map_exp_extractor.env_utils import load_env_from_candidates
 from geo_map_exp_extractor.jobs import ExtractionJobResult, run_extraction_job
-from geo_map_exp_extractor.openai_runner import DEFAULT_MODEL
-from geo_map_exp_extractor.settings import DEFAULT_IMAGE_DETAIL, DEFAULT_MAX_IMAGE_SIDE_PX
+from geo_map_exp_extractor.settings import (
+    DEFAULT_MAX_IMAGE_SIDE_PX,
+)
 
 app = typer.Typer(help="Extract structured tables from geologic map explanation images.")
 console = Console()
@@ -47,7 +48,8 @@ def _print_result_summary(job: ExtractionJobResult) -> None:
         f"input={usage.get('input_tokens')} "
         f"output={usage.get('output_tokens')} "
         f"total={usage.get('total_tokens')} "
-        f"cached={usage.get('cached_tokens')}"
+        f"cached={usage.get('cached_tokens')} "
+        f"reasoning={usage.get('reasoning_tokens')}"
     )
     if job.estimated_cost_usd is None:
         console.print(
@@ -56,6 +58,8 @@ def _print_result_summary(job: ExtractionJobResult) -> None:
         )
     else:
         console.print(f"Estimated cost (USD): {job.estimated_cost_usd}")
+    for warning in job.warnings:
+        console.print(f"[yellow]Warning:[/yellow] {warning}")
     console.print("API mode: cache reuse" if job.cache_reused else "API mode: fresh call")
 
 
@@ -71,11 +75,26 @@ def single_run(
         Path,
         typer.Option("--prompt-template", help="Markdown extraction prompt template."),
     ] = Path("prompts/extraction_prompt.md"),
-    model: Annotated[str, typer.Option("--model", help="OpenAI model name.")] = DEFAULT_MODEL,
+    model: Annotated[str | None, typer.Option("--model", help="OpenAI model name.")] = None,
+    reasoning_effort: Annotated[
+        str | None,
+        typer.Option("--reasoning-effort", help="Reasoning effort: none, low, medium, high, xhigh."),
+    ] = None,
     image_detail: Annotated[
-        str,
+        str | None,
         typer.Option("--image-detail", help="Image detail level: high, auto, or low."),
-    ] = DEFAULT_IMAGE_DETAIL,
+    ] = None,
+    max_output_tokens: Annotated[
+        int | None,
+        typer.Option("--max-output-tokens", help="Cap response tokens (reasoning + final output)."),
+    ] = None,
+    no_max_output_tokens_limit: Annotated[
+        bool,
+        typer.Option(
+            "--no-max-output-tokens-limit",
+            help="Disable max_output_tokens for this run.",
+        ),
+    ] = False,
     include_profile_notes: Annotated[
         bool,
         typer.Option("--include-profile-notes", help="Append profile notes to the prompt."),
@@ -125,7 +144,10 @@ def single_run(
         profile_path=profile,
         output_dir=out_dir,
         model=model,
+        reasoning_effort=reasoning_effort,
         image_detail=image_detail,
+        max_output_tokens=max_output_tokens,
+        use_max_output_tokens_limit=not no_max_output_tokens_limit,
         prompt_template_path=prompt_template,
         include_profile_notes=include_profile_notes,
         use_cache=not no_cache,
@@ -159,11 +181,26 @@ def batch_run(
         Path,
         typer.Option("--prompt-template", help="Markdown extraction prompt template."),
     ] = Path("prompts/extraction_prompt.md"),
-    model: Annotated[str, typer.Option("--model", help="OpenAI model name.")] = DEFAULT_MODEL,
+    model: Annotated[str | None, typer.Option("--model", help="OpenAI model name.")] = None,
+    reasoning_effort: Annotated[
+        str | None,
+        typer.Option("--reasoning-effort", help="Reasoning effort: none, low, medium, high, xhigh."),
+    ] = None,
     image_detail: Annotated[
-        str,
+        str | None,
         typer.Option("--image-detail", help="Image detail level: high, auto, or low."),
-    ] = DEFAULT_IMAGE_DETAIL,
+    ] = None,
+    max_output_tokens: Annotated[
+        int | None,
+        typer.Option("--max-output-tokens", help="Cap response tokens (reasoning + final output)."),
+    ] = None,
+    no_max_output_tokens_limit: Annotated[
+        bool,
+        typer.Option(
+            "--no-max-output-tokens-limit",
+            help="Disable max_output_tokens for this batch run.",
+        ),
+    ] = False,
     include_profile_notes: Annotated[
         bool,
         typer.Option("--include-profile-notes", help="Append profile notes to the prompt."),
@@ -221,7 +258,10 @@ def batch_run(
             profile_path=profile,
             output_dir=out_dir,
             model=model,
+            reasoning_effort=reasoning_effort,
             image_detail=image_detail,
+            max_output_tokens=max_output_tokens,
+            use_max_output_tokens_limit=not no_max_output_tokens_limit,
             prompt_template_path=prompt_template,
             include_profile_notes=include_profile_notes,
             use_cache=not no_cache,

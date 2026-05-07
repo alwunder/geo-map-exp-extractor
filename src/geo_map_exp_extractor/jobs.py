@@ -20,7 +20,6 @@ from geo_map_exp_extractor.image_io import (
     prepare_image_for_api,
 )
 from geo_map_exp_extractor.openai_runner import (
-    DEFAULT_MODEL,
     ExtractionResult,
     ExtractionValidationError,
     UsageSummary,
@@ -30,8 +29,11 @@ from geo_map_exp_extractor.pricing import estimate_cost_usd
 from geo_map_exp_extractor.prompt_builder import build_prompt, read_profile_notes
 from geo_map_exp_extractor.schema_builder import build_response_schema, build_text_format
 from geo_map_exp_extractor.settings import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_IMAGE_DETAIL,
     DEFAULT_MAX_IMAGE_SIDE_PX,
+    DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT,
     REQUEST_CACHE_DIR,
     SCHEMA_VERSION,
 )
@@ -55,6 +57,7 @@ class ExtractionJobResult:
     rough_image_tokens: int
     usage: dict[str, int | None]
     estimated_cost_usd: float | None
+    warnings: list[str]
 
 
 def _default_prompt_template_path() -> Path:
@@ -107,7 +110,9 @@ def _request_fingerprint(
     profile_fields: Sequence[str],
     prompt_hash: str,
     model: str,
+    reasoning_effort: str,
     image_detail: str,
+    max_output_tokens: int | None,
     schema_version: str,
 ) -> str:
     """Build stable fingerprint for cache lookup and run de-duplication."""
@@ -118,7 +123,9 @@ def _request_fingerprint(
         "profile_fields": list(profile_fields),
         "prompt_hash": prompt_hash,
         "model": model,
+        "reasoning_effort": reasoning_effort,
         "image_detail": image_detail,
+        "max_output_tokens": max_output_tokens,
         "schema_version": schema_version,
     }
     return _sha256_json(payload)
@@ -137,6 +144,8 @@ def _save_cache_payload(
         "raw_response": extraction.raw_response,
         "data": extraction.data,
         "usage": _usage_to_dict(extraction),
+        "incomplete_max_output_tokens": extraction.incomplete_max_output_tokens,
+        "token_limit_warning": extraction.token_limit_warning,
     }
     cache_file = _cache_file_path(request_hash)
     cache_file.parent.mkdir(parents=True, exist_ok=True)
@@ -191,12 +200,14 @@ def _usage_to_dict(extraction: ExtractionResult | None) -> dict[str, int | None]
             "output_tokens": None,
             "total_tokens": None,
             "cached_tokens": None,
+            "reasoning_tokens": None,
         }
     return {
         "input_tokens": extraction.usage.input_tokens,
         "output_tokens": extraction.usage.output_tokens,
         "total_tokens": extraction.usage.total_tokens,
         "cached_tokens": extraction.usage.cached_tokens,
+        "reasoning_tokens": extraction.usage.reasoning_tokens,
     }
 
 
@@ -208,6 +219,9 @@ def _usage_from_dict(payload: Any) -> UsageSummary | None:
         output_tokens=payload.get("output_tokens") if isinstance(payload.get("output_tokens"), int) else None,
         total_tokens=payload.get("total_tokens") if isinstance(payload.get("total_tokens"), int) else None,
         cached_tokens=payload.get("cached_tokens") if isinstance(payload.get("cached_tokens"), int) else None,
+        reasoning_tokens=payload.get("reasoning_tokens")
+        if isinstance(payload.get("reasoning_tokens"), int)
+        else None,
     )
 
 
@@ -221,7 +235,9 @@ def build_review_manifest(
     prompt_hash: str,
     schema_hash: str,
     model: str,
+    reasoning_effort: str,
     image_detail: str,
+    max_output_tokens: int | None,
     schema_version: str,
     request_hash: str,
     api_call_mode: str,
@@ -230,6 +246,7 @@ def build_review_manifest(
     segmented_mode: bool,
     segment_settings: dict[str, int] | None,
     segment_calls: list[dict[str, Any]],
+    warnings: list[str],
     output_paths: dict[str, Path],
 ) -> dict[str, Any]:
     """Build manifest metadata for one extraction run."""
@@ -256,7 +273,9 @@ def build_review_manifest(
         "schema_version": schema_version,
         "request_fingerprint": request_hash,
         "model": model,
+        "reasoning_effort": reasoning_effort,
         "image_detail": image_detail,
+        "max_output_tokens": max_output_tokens,
         "api_call_mode": api_call_mode,
         "segmented_mode": segmented_mode,
         "segment_settings": segment_settings,
@@ -265,7 +284,9 @@ def build_review_manifest(
         "output_tokens": usage.get("output_tokens"),
         "total_tokens": usage.get("total_tokens"),
         "cached_tokens": usage.get("cached_tokens"),
+        "reasoning_tokens": usage.get("reasoning_tokens"),
         "estimated_cost_usd": estimated_cost_usd,
+        "warnings": warnings,
         "rough_image_tokens_estimate": prepared_image.rough_image_tokens,
         "image_preparation": {
             "was_converted": prepared_image.was_converted,
@@ -351,8 +372,11 @@ def run_extraction_job(
     profile_path: str | Path,
     output_dir: str | Path,
     api_key: str | None = None,
-    model: str = DEFAULT_MODEL,
-    image_detail: str = DEFAULT_IMAGE_DETAIL,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    image_detail: str | None = None,
+    max_output_tokens: int | None = None,
+    use_max_output_tokens_limit: bool = True,
     prompt_template_path: str | Path | None = None,
     include_profile_notes: bool = False,
     use_cache: bool = True,
@@ -387,6 +411,25 @@ def run_extraction_job(
     paths = _copy_inputs(image, profile_file, paths)
 
     profile = load_profile(profile_file)
+    selected_model = model if model is not None else profile.model
+    selected_reasoning_effort = (
+        reasoning_effort if reasoning_effort is not None else profile.reasoning_effort
+    )
+    selected_image_detail = image_detail if image_detail is not None else profile.image_detail
+    selected_max_output_tokens = None
+    if use_max_output_tokens_limit:
+        selected_max_output_tokens = (
+            max_output_tokens if max_output_tokens is not None else profile.max_output_tokens
+        )
+    if not selected_model:
+        selected_model = DEFAULT_MODEL
+    if not selected_reasoning_effort:
+        selected_reasoning_effort = DEFAULT_REASONING_EFFORT
+    if not selected_image_detail:
+        selected_image_detail = DEFAULT_IMAGE_DETAIL
+    if use_max_output_tokens_limit and selected_max_output_tokens is None:
+        selected_max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
+
     prompt_template = (
         Path(prompt_template_path) if prompt_template_path else _default_prompt_template_path()
     )
@@ -408,7 +451,7 @@ def run_extraction_job(
     prepared = prepare_image_for_api(
         image_path=image,
         output_dir=run_dir,
-        detail=image_detail,
+        detail=selected_image_detail,
         max_side_px=max_image_side_px,
     )
     paths["processed_image"] = prepared.processed_path
@@ -420,8 +463,10 @@ def run_extraction_job(
         profile_id=profile.id,
         profile_fields=profile.fields,
         prompt_hash=prompt_hash,
-        model=model,
-        image_detail=image_detail,
+        model=selected_model,
+        reasoning_effort=selected_reasoning_effort,
+        image_detail=selected_image_detail,
+        max_output_tokens=selected_max_output_tokens,
         schema_version=(
             f"{SCHEMA_VERSION}|seg:{int(segmented_mode)}|h:{segment_height_px}|o:{segment_overlap_px}"
         ),
@@ -432,6 +477,7 @@ def run_extraction_job(
     cache_reused = False
     api_call_mode = "dry_run" if dry_run else "fresh_api_call"
     segment_calls: list[dict[str, Any]] = []
+    run_warnings: list[str] = []
 
     if not dry_run:
         segment_items: list[tuple[int, Path, str, int]] = [
@@ -457,7 +503,13 @@ def run_extraction_job(
 
         all_rows: list[dict[str, Any]] = []
         segment_raw_payloads: list[dict[str, Any]] = []
-        usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cached_tokens": 0}
+        usage_totals = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cached_tokens": 0,
+            "reasoning_tokens": 0,
+        }
         cache_modes: set[str] = set()
 
         for index, segment_path, segment_hash, _ in segment_items:
@@ -466,8 +518,10 @@ def run_extraction_job(
                 profile_id=profile.id,
                 profile_fields=profile.fields,
                 prompt_hash=prompt_hash,
-                model=model,
-                image_detail=image_detail,
+                model=selected_model,
+                reasoning_effort=selected_reasoning_effort,
+                image_detail=selected_image_detail,
+                max_output_tokens=selected_max_output_tokens,
                 schema_version=(
                     f"{SCHEMA_VERSION}|seg:{int(segmented_mode)}|h:{segment_height_px}|o:{segment_overlap_px}"
                 ),
@@ -484,6 +538,12 @@ def run_extraction_job(
                     data=data if isinstance(data, dict) else {},
                     raw_response=raw_response if isinstance(raw_response, dict) else {},
                     usage=_usage_from_dict(cached_payload.get("usage")),
+                    incomplete_max_output_tokens=bool(cached_payload.get("incomplete_max_output_tokens")),
+                    token_limit_warning=(
+                        cached_payload.get("token_limit_warning")
+                        if isinstance(cached_payload.get("token_limit_warning"), str)
+                        else None
+                    ),
                 )
             else:
                 cache_modes.add("fresh_api_call")
@@ -492,9 +552,11 @@ def run_extraction_job(
                         image_path=segment_path,
                         prompt=prompt,
                         profile=profile,
-                        model=model,
+                        model=selected_model,
                         api_key=api_key,
-                        image_detail=image_detail,
+                        reasoning_effort=selected_reasoning_effort,
+                        image_detail=selected_image_detail,
+                        max_output_tokens=selected_max_output_tokens,
                         schema=text_format,
                     )
                 except ExtractionValidationError as exc:
@@ -518,8 +580,13 @@ def run_extraction_job(
                     "request_fingerprint": segment_request_hash,
                     "api_call_mode": "cache_reuse" if cached_payload is not None else "fresh_api_call",
                     "usage": segment_usage,
+                    "token_limit_warning": segment_extraction.token_limit_warning,
                 }
             )
+            if segment_extraction.token_limit_warning:
+                run_warnings.append(
+                    f"Segment {index}: {segment_extraction.token_limit_warning}"
+                )
 
         rows = all_rows
         extraction = ExtractionResult(
@@ -527,7 +594,7 @@ def run_extraction_job(
                 "fields": profile.fields,
                 "rows": rows,
                 "notes": [],
-                "warnings": [],
+                "warnings": run_warnings,
             },
             raw_response=(
                 segment_raw_payloads[0]
@@ -539,6 +606,7 @@ def run_extraction_job(
                 output_tokens=usage_totals["output_tokens"] or None,
                 total_tokens=usage_totals["total_tokens"] or None,
                 cached_tokens=usage_totals["cached_tokens"] or None,
+                reasoning_tokens=usage_totals.get("reasoning_tokens") or None,
             ),
         )
 
@@ -564,7 +632,7 @@ def run_extraction_job(
 
     usage = _usage_to_dict(extraction)
     estimated_cost = estimate_cost_usd(
-        model=model,
+        model=selected_model,
         input_tokens=usage.get("input_tokens"),
         output_tokens=usage.get("output_tokens"),
         cached_tokens=usage.get("cached_tokens"),
@@ -577,8 +645,10 @@ def run_extraction_job(
         profile_fields=profile.fields,
         prompt_hash=prompt_hash,
         schema_hash=schema_hash,
-        model=model,
-        image_detail=image_detail,
+        model=selected_model,
+        reasoning_effort=selected_reasoning_effort,
+        image_detail=selected_image_detail,
+        max_output_tokens=selected_max_output_tokens,
         schema_version=SCHEMA_VERSION,
         request_hash=request_hash,
         api_call_mode=api_call_mode,
@@ -591,6 +661,7 @@ def run_extraction_job(
             else None
         ),
         segment_calls=segment_calls,
+        warnings=run_warnings,
         output_paths=paths,
     )
     write_json(manifest, paths["manifest"])
@@ -608,4 +679,5 @@ def run_extraction_job(
         rough_image_tokens=prepared.rough_image_tokens,
         usage=usage,
         estimated_cost_usd=estimated_cost,
+        warnings=run_warnings,
     )

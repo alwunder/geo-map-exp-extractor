@@ -6,8 +6,16 @@ from pathlib import Path
 
 SCHEMA_VERSION = "1.0"
 
+DEFAULT_MODEL = "gpt-5.5"
+EXPERIMENTAL_MODEL = "chat-latest"
+SUPPORTED_MODELS = ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-5.5-pro", EXPERIMENTAL_MODEL)
+
+DEFAULT_REASONING_EFFORT = "medium"
+SUPPORTED_REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh")
+
 DEFAULT_IMAGE_DETAIL = "high"
 SUPPORTED_IMAGE_DETAILS = ("high", "low", "auto")
+DEFAULT_MAX_OUTPUT_TOKENS = 12000
 DEFAULT_MAX_IMAGE_SIDE_PX = 2800
 
 DEFAULT_RETRY_ATTEMPTS = 3

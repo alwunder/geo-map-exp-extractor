@@ -7,6 +7,14 @@ from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from geo_map_exp_extractor.settings import (
+    DEFAULT_IMAGE_DETAIL,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT,
+    SUPPORTED_IMAGE_DETAILS,
+    SUPPORTED_REASONING_EFFORTS,
+)
 
 
 class ExtractionProfile(BaseModel):
@@ -23,6 +31,10 @@ class ExtractionProfile(BaseModel):
     normalize_line_breaks: bool
     normalize_hyphenated_line_breaks: bool
     special_instructions: list[str] = Field(default_factory=list)
+    model: str = DEFAULT_MODEL
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT
+    image_detail: str = DEFAULT_IMAGE_DETAIL
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
 
     @field_validator("id", "name", "task_label")
     @classmethod
@@ -55,6 +67,43 @@ class ExtractionProfile(BaseModel):
             return []
         if isinstance(value, str):
             return [value]
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def normalize_model(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            msg = "model must not be empty"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("reasoning_effort")
+    @classmethod
+    def validate_reasoning_effort(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in SUPPORTED_REASONING_EFFORTS:
+            supported = ", ".join(SUPPORTED_REASONING_EFFORTS)
+            msg = f"unsupported reasoning_effort {value!r}; expected one of: {supported}"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("image_detail")
+    @classmethod
+    def validate_image_detail(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in SUPPORTED_IMAGE_DETAILS:
+            supported = ", ".join(SUPPORTED_IMAGE_DETAILS)
+            msg = f"unsupported image_detail {value!r}; expected one of: {supported}"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("max_output_tokens")
+    @classmethod
+    def validate_max_output_tokens(cls, value: int) -> int:
+        if value <= 0:
+            msg = "max_output_tokens must be greater than zero"
+            raise ValueError(msg)
         return value
 
 

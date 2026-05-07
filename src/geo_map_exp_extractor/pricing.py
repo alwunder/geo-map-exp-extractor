@@ -18,6 +18,26 @@ class ModelPricing:
 # Update these entries to match the current OpenAI pricing for your account/model snapshot.
 # UPDATED 2026-05-06
 MODEL_PRICING_USD_PER_1M: dict[str, ModelPricing] = {
+    "gpt-5.5": ModelPricing(
+        input_per_million=5.00,
+        output_per_million=30.00,
+        cached_input_per_million=0.50,
+    ),
+    "gpt-5.5-pro": ModelPricing(
+        input_per_million=30.00,
+        output_per_million=180.00,
+        cached_input_per_million=None,
+    ),
+    "gpt-5.4": ModelPricing(
+        input_per_million=2.50,
+        output_per_million=15.00,
+        cached_input_per_million=0.25,
+    ),
+    "gpt-5.4-mini": ModelPricing(
+        input_per_million=0.75,
+        output_per_million=4.50,
+        cached_input_per_million=0.075,
+    ),
     "chat-latest": ModelPricing(
         input_per_million=5.00,
         output_per_million=30.00,
