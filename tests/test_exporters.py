@@ -40,7 +40,7 @@ def test_build_and_write_manifest(tmp_path: Path) -> None:
         ),
         profile=profile,
         profile_path=Path("profiles/water_production.yml"),
-        model="gpt-4o-mini",
+        model="chat-latest",
         output_paths=output_paths,
         timestamp="2026-05-06T00:00:00+00:00",
     )

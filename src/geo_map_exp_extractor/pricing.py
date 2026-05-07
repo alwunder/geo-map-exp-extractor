@@ -15,12 +15,13 @@ class ModelPricing:
 
 
 # Keep this map user-editable. Values here are examples and may change over time.
-# Update these entries to match current OpenAI pricing for your account/model snapshot.
+# Update these entries to match the current OpenAI pricing for your account/model snapshot.
+# UPDATED 2026-05-06
 MODEL_PRICING_USD_PER_1M: dict[str, ModelPricing] = {
-    "gpt-4o-mini": ModelPricing(
-        input_per_million=0.15,
-        output_per_million=0.60,
-        cached_input_per_million=0.075,
+    "chat-latest": ModelPricing(
+        input_per_million=5.00,
+        output_per_million=30.00,
+        cached_input_per_million=0.50,
     ),
 }
 

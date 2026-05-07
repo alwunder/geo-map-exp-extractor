@@ -21,7 +21,7 @@ from geo_map_exp_extractor.settings import (
     DEFAULT_RETRY_BACKOFF_SECONDS,
 )
 
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "chat-latest"
 
 
 @dataclass(frozen=True)
