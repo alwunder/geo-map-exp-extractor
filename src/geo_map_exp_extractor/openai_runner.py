@@ -17,11 +17,14 @@ from geo_map_exp_extractor.image_io import image_to_data_url
 from geo_map_exp_extractor.schema_builder import build_text_format
 from geo_map_exp_extractor.settings import (
     DEFAULT_IMAGE_DETAIL,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MODEL as SETTINGS_DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT,
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_SECONDS,
 )
 
-DEFAULT_MODEL = "chat-latest"
+DEFAULT_MODEL = SETTINGS_DEFAULT_MODEL
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,7 @@ class UsageSummary:
     output_tokens: int | None = None
     total_tokens: int | None = None
     cached_tokens: int | None = None
+    reasoning_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,8 @@ class ExtractionResult:
     data: dict[str, Any]
     raw_response: dict[str, Any]
     usage: UsageSummary | None = None
+    incomplete_max_output_tokens: bool = False
+    token_limit_warning: str | None = None
 
 
 class ExtractionValidationError(RuntimeError):
@@ -119,15 +125,40 @@ def _extract_usage(raw_response: dict[str, Any]) -> UsageSummary | None:
     output_tokens = usage.get("output_tokens")
     total_tokens = usage.get("total_tokens")
     cached_tokens = None
+    reasoning_tokens = None
     details = usage.get("input_tokens_details")
     if isinstance(details, dict):
         cached_tokens = details.get("cached_tokens")
+    output_details = usage.get("output_tokens_details")
+    if isinstance(output_details, dict):
+        reasoning_tokens = output_details.get("reasoning_tokens")
     return UsageSummary(
         input_tokens=input_tokens if isinstance(input_tokens, int) else None,
         output_tokens=output_tokens if isinstance(output_tokens, int) else None,
         total_tokens=total_tokens if isinstance(total_tokens, int) else None,
         cached_tokens=cached_tokens if isinstance(cached_tokens, int) else None,
+        reasoning_tokens=reasoning_tokens if isinstance(reasoning_tokens, int) else None,
     )
+
+
+def _supports_reasoning_config(model: str) -> bool:
+    normalized = model.strip().lower()
+    return (
+        normalized.startswith("gpt-5")
+        or normalized.startswith("o")
+        or normalized.endswith("chat-latest")
+        or normalized == "chat-latest"
+    )
+
+
+def _is_incomplete_for_max_output_tokens(raw_response: dict[str, Any]) -> bool:
+    if raw_response.get("status") != "incomplete":
+        return False
+    incomplete_details = raw_response.get("incomplete_details")
+    if not isinstance(incomplete_details, dict):
+        return False
+    reason = incomplete_details.get("reason")
+    return reason in {"max_output_tokens", "max_tokens"}
 
 
 def _build_openai_client(api_key: str) -> Any:
@@ -176,7 +207,9 @@ def run_extraction(
     profile: ExtractionProfile,
     model: str = DEFAULT_MODEL,
     api_key: str | None = None,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     image_detail: str = DEFAULT_IMAGE_DETAIL,
+    max_output_tokens: int | None = DEFAULT_MAX_OUTPUT_TOKENS,
     retries: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     schema: dict[str, Any] | None = None,
@@ -197,9 +230,9 @@ def run_extraction(
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
-            response = client.responses.create(
-                model=model,
-                input=[
+            request_payload: dict[str, Any] = {
+                "model": model,
+                "input": [
                     {
                         "role": "user",
                         "content": [
@@ -212,8 +245,14 @@ def run_extraction(
                         ],
                     }
                 ],
-                text={"format": schema or build_text_format(profile)},
-            )
+                "text": {"format": schema or build_text_format(profile)},
+            }
+            if isinstance(max_output_tokens, int) and max_output_tokens > 0:
+                request_payload["max_output_tokens"] = max_output_tokens
+            if _supports_reasoning_config(model):
+                request_payload["reasoning"] = {"effort": reasoning_effort}
+
+            response = client.responses.create(**request_payload)
             break
         except Exception as exc:  # noqa: BLE001
             last_error = exc
@@ -227,9 +266,25 @@ def run_extraction(
         raise RuntimeError(f"OpenAI request failed after {attempts} attempt(s): {last_error}") from last_error
 
     raw = response_to_dict(response)
+    incomplete_for_budget = _is_incomplete_for_max_output_tokens(raw)
+    token_limit_warning: str | None = None
+    if incomplete_for_budget:
+        token_limit_warning = (
+            "Response status is incomplete because max_output_tokens was reached. "
+            "The model may have run out of token budget during reasoning or final output."
+        )
     try:
         parsed = parse_response_json(response)
         data = validate_extraction_data(profile, parsed)
     except (ValueError, ValidationError) as exc:
-        raise ExtractionValidationError(f"Structured output validation failed: {exc}", raw) from exc
-    return ExtractionResult(data=data, raw_response=raw, usage=_extract_usage(raw))
+        message = f"Structured output validation failed: {exc}"
+        if token_limit_warning:
+            message = f"{message}. {token_limit_warning}"
+        raise ExtractionValidationError(message, raw) from exc
+    return ExtractionResult(
+        data=data,
+        raw_response=raw,
+        usage=_extract_usage(raw),
+        incomplete_max_output_tokens=incomplete_for_budget,
+        token_limit_warning=token_limit_warning,
+    )
