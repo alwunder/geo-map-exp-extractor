@@ -6,16 +6,19 @@ import os
 import platform
 import subprocess
 import sys
-import textwrap
 import threading
 import tkinter as tk
 from datetime import datetime
+import json
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
-from tkinter import font as tkfont
 from typing import Any
 
 from PIL import Image, ImageTk
+try:
+    from tksheet import Sheet
+except ImportError:  # pragma: no cover - optional GUI dependency
+    Sheet = None
 
 # Support running this file directly (e.g., IDE "Run file") in a src-layout project.
 if __package__ is None or __package__ == "":
@@ -29,6 +32,7 @@ from geo_map_exp_extractor.jobs import (
     ExtractionJobResult,
     build_feedback_record,
     promote_corrected_to_gold,
+    review_output_paths,
     run_extraction_job,
     write_corrected_outputs,
     write_feedback_jsonl,
@@ -54,7 +58,7 @@ class ReviewWorkbench(tk.Tk):
         self._load_environment()
 
         self.image_path = tk.StringVar()
-        self.profile_path = tk.StringVar(value=self._display_path(self._default_profile_path()))
+        self.profile_path = tk.StringVar(value="")
         self.output_dir = tk.StringVar(value=self._display_path(self._repo_root() / "outputs"))
         self.api_key_override: str | None = None
         self.model = tk.StringVar(value=DEFAULT_MODEL)
@@ -72,12 +76,31 @@ class ReviewWorkbench(tk.Tk):
         self.rows: list[dict[str, Any]] = []
         self.original_rows: list[dict[str, Any]] = []
         self.feedback_records: list[dict[str, Any]] = []
+        self.row_statuses: list[str] = []
+        self.row_comments: list[str] = []
+        self.row_status_options = ("accepted", "needs_review", "bad_extraction")
+        self.row_status_labels = {
+            "accepted": "accepted",
+            "needs_review": "needs review",
+            "bad_extraction": "bad extraction",
+        }
+        self.row_status_var = tk.StringVar(value=self.row_status_labels["needs_review"])
+        self.row_comment_var = tk.StringVar(value="")
+        self.selected_row_index: int | None = None
+        self.table_fields: list[str] = []
+        self._use_tksheet = Sheet is not None
+        self.sheet: Any = None
+        self.table: ttk.Treeview | None = None
+        self.table_frame: ttk.Frame | None = None
+        self.column_widths_by_field: dict[str, int] = {}
+        self._manual_column_resize = False
         self.zoom = 1.0
         self.source_image: Image.Image | None = None
         self.preview_photo: ImageTk.PhotoImage | None = None
         self.preview_source_path: Path | None = None
-        self.row_height = tk.IntVar(value=72)
         self.table_style_name = "Results.Treeview"
+        self._default_treeview_row_height = 72
+        self.has_unsaved_changes = False
         self._is_panning = False
         self._run_thread: threading.Thread | None = None
         self._worker_result: ExtractionJobResult | None = None
@@ -142,6 +165,78 @@ class ReviewWorkbench(tk.Tk):
             return "No API key loaded. Add OPENAI_API_KEY to .env or use 'Set API key...'."
         return f"API key loaded from {source}. Choose an image, profile, and output folder."
 
+    def _format_elapsed(self, elapsed_seconds: float) -> str:
+        total_seconds = max(0, int(round(elapsed_seconds)))
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _set_status_message(self, message: str) -> None:
+        suffix = " | unsaved changes" if self.result is not None and self.has_unsaved_changes else ""
+        self.status.set(f"{message}{suffix}")
+
+    def _mark_unsaved(self) -> None:
+        if self.result is None:
+            return
+        self.has_unsaved_changes = True
+        self._set_status_message(f"Project loaded: {self.result.run_id}")
+
+    def _mark_saved(self) -> None:
+        self.has_unsaved_changes = False
+        if self.result is not None:
+            self._set_status_message(f"Project saved: {self.result.run_id}")
+
+    def _status_color(self, status: str) -> str:
+        if status == "accepted":
+            return "#E8F6E8"
+        if status == "bad_extraction":
+            return "#FCE8E8"
+        return "#FFF7DA"
+
+    def _sync_status_dropdown_color(self) -> None:
+        status_code = self._status_code_from_label(self.row_status_var.get())
+        color = self._status_color(status_code)
+        style = ttk.Style(self)
+        style.configure(self.row_status_style_name, fieldbackground=color, background=color)
+        style.map(
+            self.row_status_style_name,
+            fieldbackground=[("readonly", color)],
+            selectbackground=[("readonly", color)],
+            background=[("readonly", color)],
+        )
+
+    def _on_notes_modified(self, _: tk.Event[Any]) -> None:
+        if not self.notes.edit_modified():
+            return
+        self.notes.edit_modified(False)
+        self._mark_unsaved()
+
+    def _center_window(self, window: tk.Toplevel) -> None:
+        """Center a dialog over the main app window, with screen bounds clamping."""
+
+        window.update_idletasks()
+        width = max(window.winfo_width(), window.winfo_reqwidth())
+        height = max(window.winfo_height(), window.winfo_reqheight())
+        if width <= 1:
+            width = 480
+        if height <= 1:
+            height = 220
+
+        self.update_idletasks()
+        parent_w = max(self.winfo_width(), self.winfo_reqwidth())
+        parent_h = max(self.winfo_height(), self.winfo_reqheight())
+        parent_x = self.winfo_rootx()
+        parent_y = self.winfo_rooty()
+
+        x = parent_x + (parent_w - width) // 2
+        y = parent_y + (parent_h - height) // 2
+
+        screen_w = window.winfo_screenwidth()
+        screen_h = window.winfo_screenheight()
+        x = max(0, min(x, screen_w - width))
+        y = max(0, min(y, screen_h - height))
+        window.geometry(f"{width}x{height}+{x}+{y}")
+
     def _prompt_api_key_override(self) -> None:
         """Open API key dialog with masked entry and .env reset support."""
 
@@ -204,6 +299,7 @@ class ReviewWorkbench(tk.Tk):
 
         dialog.bind("<Escape>", lambda _: dialog.destroy())
         dialog.bind("<Return>", lambda _: save_key())
+        self._center_window(dialog)
 
     def _clear_api_key_override(self) -> None:
         """Clear session override and fall back to .env/environment key."""
@@ -267,10 +363,13 @@ class ReviewWorkbench(tk.Tk):
         )
         self.run_button = ttk.Button(top, text="Run extraction", command=self._run_extraction)
         self.run_button.grid(row=5, column=4, sticky="we", padx=4, ipadx=4)
+        ttk.Button(top, text="Load project", command=self._load_project).grid(
+            row=5, column=5, sticky="we", padx=4, ipadx=4
+        )
         ttk.Button(top, text="Open output folder", command=self._open_output_folder).grid(
             row=5, column=6, columnspan=2, sticky="e", padx=4
         )
-        ttk.Button(top, text="Save corrected", command=self._save_corrected).grid(
+        ttk.Button(top, text="Save project", command=self._save_corrected).grid(
             row=5, column=8, padx=4
         )
         ttk.Button(top, text="Promote corrected", command=self._promote_corrected).grid(
@@ -317,43 +416,91 @@ class ReviewWorkbench(tk.Tk):
         right.columnconfigure(0, weight=1)
         table_controls = ttk.Frame(right)
         table_controls.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        ttk.Label(table_controls, text="Row height").pack(side=tk.LEFT)
-        row_height_spinbox = ttk.Spinbox(
-            table_controls,
-            from_=24,
-            to=220,
-            increment=4,
-            textvariable=self.row_height,
-            width=5,
-            command=self._on_row_height_change,
+        ttk.Button(table_controls, text="Add row", command=self._add_row).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(table_controls, text="Delete row", command=self._delete_selected_row).pack(
+            side=tk.LEFT, padx=(4, 0)
         )
-        row_height_spinbox.pack(side=tk.LEFT, padx=(4, 0))
-        row_height_spinbox.bind("<Return>", self._on_row_height_change)
-        row_height_spinbox.bind("<FocusOut>", self._on_row_height_change)
+        ttk.Button(table_controls, text="Move up", command=lambda: self._move_selected_row(-1)).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+        ttk.Button(table_controls, text="Move down", command=lambda: self._move_selected_row(1)).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+        ttk.Button(table_controls, text="Auto-fit rows", command=self._auto_fit_rows).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(table_controls, text="Reset widths", command=self._reset_column_widths).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+        ttk.Label(table_controls, text="Status").pack(side=tk.LEFT, padx=(12, 2))
+        self.row_status_style_name = "RowStatus.TCombobox"
+        ttk.Style(self).configure(self.row_status_style_name, fieldbackground="#FFF7DA")
+        self.row_status_combo = ttk.Combobox(
+            table_controls,
+            textvariable=self.row_status_var,
+            values=[self.row_status_labels[code] for code in self.row_status_options],
+            width=16,
+            state="readonly",
+            style=self.row_status_style_name,
+        )
+        self.row_status_combo.pack(side=tk.LEFT)
+        self.row_status_combo.bind("<<ComboboxSelected>>", self._apply_selected_row_metadata)
+        ttk.Label(table_controls, text="Comment").pack(side=tk.LEFT, padx=(10, 2))
+        self.row_comment_entry = ttk.Entry(table_controls, textvariable=self.row_comment_var, width=26)
+        self.row_comment_entry.pack(side=tk.LEFT)
+        self.row_comment_entry.bind("<Return>", self._apply_selected_row_metadata)
+        ttk.Button(table_controls, text="Apply", command=self._apply_selected_row_metadata).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
 
         style = ttk.Style(self)
-        style.configure(self.table_style_name, rowheight=self.row_height.get())
+        style.configure(self.table_style_name, rowheight=self._default_treeview_row_height)
         table_frame = ttk.Frame(right)
+        self.table_frame = table_frame
         table_frame.grid(row=1, column=0, sticky="nsew")
         table_frame.grid_propagate(False)
-        self.table = ttk.Treeview(table_frame, show="headings", style=self.table_style_name)
-        self.table.bind("<Double-1>", self._begin_cell_edit)
-        self.table.bind("<Configure>", self._refresh_table_display)
-        self.table.bind("<ButtonRelease-1>", self._refresh_table_display)
-        self.table.bind("<MouseWheel>", self._on_table_mousewheel)
-        self.table.bind("<Shift-MouseWheel>", self._on_table_shift_mousewheel)
-        table_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.table.yview)
-        table_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.table.xview)
-        self.table.configure(yscrollcommand=table_y.set, xscrollcommand=table_x.set)
-        self.table.grid(row=0, column=0, sticky="nsew")
-        table_y.grid(row=0, column=1, sticky="ns")
-        table_x.grid(row=1, column=0, sticky="ew")
-        table_frame.rowconfigure(0, weight=1)
-        table_frame.columnconfigure(0, weight=1)
+        table_frame.bind("<Configure>", self._on_table_frame_resize)
+        if self._use_tksheet and Sheet is not None:
+            self.sheet = Sheet(
+                table_frame,
+                data=[],
+                headers=[],
+                theme="light blue",
+                table_wrap="w",
+                header_wrap="w",
+                index_wrap="w",
+                cell_auto_resize_enabled=False,
+                auto_resize_columns=None,
+            )
+            self.sheet.enable_bindings("all")
+            self.sheet.extra_bindings("end_edit_cell", self._on_sheet_end_edit_cell)
+            self.sheet.extra_bindings("end_paste", self._on_sheet_end_paste)
+            self.sheet.extra_bindings("cell_select", self._on_sheet_cell_select)
+            self.sheet.extra_bindings("column_width_resize", self._on_sheet_column_resize)
+            self.sheet.bind("<ButtonRelease-1>", self._on_sheet_select_event)
+            self.sheet.bind("<KeyRelease>", self._on_sheet_select_event)
+            self.sheet.pack(fill=tk.BOTH, expand=True)
+        else:
+            self.table = ttk.Treeview(table_frame, show="headings", style=self.table_style_name)
+            self.table.bind("<Double-1>", self._begin_cell_edit)
+            self.table.bind("<Configure>", self._refresh_table_display)
+            self.table.bind("<ButtonRelease-1>", self._refresh_table_display)
+            self.table.bind("<MouseWheel>", self._on_table_mousewheel)
+            self.table.bind("<Shift-MouseWheel>", self._on_table_shift_mousewheel)
+            self.table.bind("<<TreeviewSelect>>", self._on_treeview_select)
+            table_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.table.yview)
+            table_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.table.xview)
+            self.table.configure(yscrollcommand=table_y.set, xscrollcommand=table_x.set)
+            self.table.grid(row=0, column=0, sticky="nsew")
+            table_y.grid(row=0, column=1, sticky="ns")
+            table_x.grid(row=1, column=0, sticky="ew")
+            table_frame.rowconfigure(0, weight=1)
+            table_frame.columnconfigure(0, weight=1)
 
         ttk.Label(right, text="Notes").grid(row=2, column=0, sticky="w", pady=(8, 0))
         self.notes = tk.Text(right, height=6, wrap=tk.WORD)
         self.notes.grid(row=3, column=0, sticky="ew")
+        self.notes.bind("<<Modified>>", self._on_notes_modified)
         paned.add(right, weight=1)
 
         status_frame = ttk.Frame(self, padding=(8, 4))
@@ -369,8 +516,9 @@ class ReviewWorkbench(tk.Tk):
 
     def _profile_row(self, parent: ttk.Frame, row: int) -> None:
         ttk.Label(parent, text="Profile:").grid(row=row, column=0, sticky="w", padx=(0, 4), pady=2)
-        self.profile_combo = ttk.Combobox(parent, textvariable=self.profile_path)
+        self.profile_combo = ttk.Combobox(parent, textvariable=self.profile_path, state="readonly")
         self.profile_combo.grid(row=row, column=1, columnspan=7, sticky="we", pady=2)
+        self.profile_combo.bind("<<ComboboxSelected>>", self._on_profile_selected)
         ttk.Button(parent, text="Browse...", command=self._browse_profile).grid(
             row=row, column=8, padx=4
         )
@@ -380,9 +528,32 @@ class ReviewWorkbench(tk.Tk):
             self._profiles_dir().glob("*.yaml")
         )
         self.profile_combo["values"] = [self._display_path(path) for path in profiles]
-        current = Path(self.profile_path.get())
-        if current.is_file():
+        current = Path(self.profile_path.get()) if self.profile_path.get().strip() else None
+        if current is not None and current.is_file():
             self._apply_profile_settings(load_profile(current))
+        else:
+            self.profile_path.set("")
+
+    def _on_profile_selected(self, _: tk.Event[Any]) -> None:
+        selected = self.profile_path.get().strip()
+        if not selected:
+            return
+        profile_file = Path(selected)
+        if not profile_file.is_file():
+            messagebox.showerror("Invalid profile", f"Profile not found: {profile_file}", parent=self)
+            self.profile_path.set("")
+            return
+        profile = load_profile(profile_file)
+        self._apply_profile_settings(profile)
+        self.rows = []
+        self.original_rows = []
+        self.row_statuses = []
+        self.row_comments = []
+        self.selected_row_index = None
+        self.column_widths_by_field = {}
+        self._manual_column_resize = False
+        self._configure_table(profile.fields, [])
+        self._sync_row_metadata_controls()
 
     def _apply_profile_settings(self, profile: Any) -> None:
         self.model.set(profile.model)
@@ -407,7 +578,15 @@ class ReviewWorkbench(tk.Tk):
             self.profile_path.set(self._display_path(path))
             profile = load_profile(path)
             self._apply_profile_settings(profile)
+            self.rows = []
+            self.original_rows = []
+            self.row_statuses = []
+            self.row_comments = []
+            self.selected_row_index = None
+            self.column_widths_by_field = {}
+            self._manual_column_resize = False
             self._configure_table(profile.fields, [])
+            self._sync_row_metadata_controls()
 
     def _browse_output(self) -> None:
         path = filedialog.askdirectory()
@@ -417,12 +596,21 @@ class ReviewWorkbench(tk.Tk):
     def _run_extraction(self) -> None:
         if self._run_thread is not None and self._run_thread.is_alive():
             return
+        selected_profile = self.profile_path.get().strip()
+        if not selected_profile:
+            messagebox.showerror("Missing profile", "Select a profile before running extraction.", parent=self)
+            return
+        profile_file = Path(selected_profile)
+        if not profile_file.is_file():
+            messagebox.showerror("Invalid profile", f"Profile not found: {profile_file}", parent=self)
+            return
         active_key, _ = self._resolve_api_key_source()
         if not self.dry_run.get() and active_key is None:
             self.status.set(self._api_key_status_message())
             messagebox.showerror(
                 "Missing API key",
                 "No API key loaded. Add OPENAI_API_KEY to .env or use 'Set API key...'.",
+                parent=self,
             )
             return
         image_candidate = Path(self.image_path.get())
@@ -433,6 +621,7 @@ class ReviewWorkbench(tk.Tk):
                     "The selected path is a folder. GUI default mode is one image at a time.\n\n"
                     "Continue anyway? (The run will fail unless you choose a single file.)"
                 ),
+                parent=self,
             )
             if not proceed:
                 self.status.set("Folder run cancelled. Choose a single image file.")
@@ -442,6 +631,7 @@ class ReviewWorkbench(tk.Tk):
                 "Confirm API call",
                 "This operation will send 1 image and one prompt to the OpenAI API. "
                 "This may incur API charges.\n\nContinue?",
+                parent=self,
             )
             if not proceed:
                 self.status.set("Extraction cancelled before API call.")
@@ -450,6 +640,7 @@ class ReviewWorkbench(tk.Tk):
                 seg_proceed = messagebox.askyesno(
                     "Segmented mode enabled",
                     "Segmented mode can issue multiple API calls and increase cost.\n\nContinue?",
+                    parent=self,
                 )
                 if not seg_proceed:
                     self.status.set("Segmented extraction cancelled.")
@@ -457,7 +648,11 @@ class ReviewWorkbench(tk.Tk):
         try:
             max_output_tokens = self.max_output_tokens.get()
         except (tk.TclError, ValueError):
-            messagebox.showerror("Invalid max output tokens", "Max output tokens must be an integer.")
+            messagebox.showerror(
+                "Invalid max output tokens",
+                "Max output tokens must be an integer.",
+                parent=self,
+            )
             return
 
         job_kwargs = {
@@ -480,7 +675,7 @@ class ReviewWorkbench(tk.Tk):
         self._worker_error = None
         self._start_progress_dialog(self.dry_run.get())
         self.run_button.configure(state=tk.DISABLED)
-        self.status.set(
+        self._set_status_message(
             "Running dry run..." if self.dry_run.get() else "Running extraction via OpenAI API..."
         )
         self._run_thread = threading.Thread(
@@ -511,12 +706,16 @@ class ReviewWorkbench(tk.Tk):
         if self._worker_error is not None:
             exc = self._worker_error
             self._worker_error = None
-            self.status.set(f"Extraction failed: {exc}")
-            messagebox.showerror("Extraction failed", str(exc))
+            self._set_status_message(f"Extraction failed: {exc}")
+            messagebox.showerror("Extraction failed", str(exc), parent=self)
             return
         if self._worker_result is None:
-            self.status.set("Extraction failed: unknown worker error")
-            messagebox.showerror("Extraction failed", "No extraction result was returned.")
+            self._set_status_message("Extraction failed: unknown worker error")
+            messagebox.showerror(
+                "Extraction failed",
+                "No extraction result was returned.",
+                parent=self,
+            )
             return
         self._apply_extraction_result(self._worker_result)
 
@@ -525,14 +724,23 @@ class ReviewWorkbench(tk.Tk):
         self.rows = [dict(row) for row in self.result.rows]
         self.original_rows = [dict(row) for row in self.result.rows]
         self.feedback_records = []
+        self.row_statuses = ["needs_review" for _ in self.rows]
+        self.row_comments = ["" for _ in self.rows]
+        self.selected_row_index = 0 if self.rows else None
+        self.column_widths_by_field = {}
+        self._manual_column_resize = False
+        self.has_unsaved_changes = False
         image_path = Path(self.image_path.get())
         if self.preview_source_path is None or image_path.resolve() != self.preview_source_path:
             self._load_preview(image_path)
         self._configure_table(self.result.fields, self.rows)
+        self._sync_row_metadata_controls()
         self.notes.delete("1.0", tk.END)
         self.notes.insert(
             "1.0", Path(self.result.output_paths["notes"]).read_text(encoding="utf-8")
         )
+        self.notes.edit_modified(False)
+        self.has_unsaved_changes = False
         usage = self.result.usage
         summary_bits = [
             f"run: {self.result.run_id}",
@@ -545,15 +753,16 @@ class ReviewWorkbench(tk.Tk):
                 f"{usage.get('input_tokens')}/{usage.get('output_tokens')}/{usage.get('total_tokens')}"
             )
             summary_bits.append(f"reasoning tokens: {usage.get('reasoning_tokens')}")
+            summary_bits.append(f"elapsed: {self._format_elapsed(self.result.elapsed_seconds)}")
             summary_bits.append(
                 "est cost USD: "
                 f"{self.result.estimated_cost_usd if self.result.estimated_cost_usd is not None else 'n/a'}"
             )
             if self.result.warnings:
                 summary_bits.append("warnings present")
-        self.status.set(" | ".join(summary_bits))
+        self._set_status_message(" | ".join(summary_bits))
         if self.result.warnings:
-            messagebox.showwarning("Extraction warning", "\n\n".join(self.result.warnings))
+            messagebox.showwarning("Extraction warning", "\n\n".join(self.result.warnings), parent=self)
 
     def _start_progress_dialog(self, is_dry_run: bool) -> None:
         self._close_progress_dialog()
@@ -580,6 +789,7 @@ class ReviewWorkbench(tk.Tk):
         self._progress_dialog = dialog
         self._progress_started_at = datetime.now()
         self._progress_elapsed.set("Elapsed: 00:00")
+        self._center_window(dialog)
 
     def _update_progress_elapsed(self) -> None:
         if self._progress_dialog is None or self._progress_started_at is None:
@@ -658,89 +868,427 @@ class ReviewWorkbench(tk.Tk):
             self.canvas.configure(cursor="hand2")
 
     def _configure_table(self, fields: list[str], rows: list[dict[str, Any]]) -> None:
+        self.table_fields = list(fields)
+        self._ensure_row_metadata_length()
+        if self._use_tksheet and self.sheet is not None:
+            self._snapshot_sheet_column_widths()
+            data = [[str(row.get(field, "")) for field in fields] for row in rows]
+            self.sheet.headers(newheaders=fields, reset_col_positions=True, redraw=False)
+            self.sheet.set_sheet_data(
+                data,
+                reset_col_positions=True,
+                reset_row_positions=True,
+                redraw=False,
+                verify=False,
+                reset_highlights=False,
+                keep_formatting=True,
+            )
+            self._apply_sheet_column_widths(fields)
+            self._fit_rows_for_all(redraw=False)
+            self._apply_sheet_status_highlights()
+            if self.selected_row_index is not None and rows:
+                selected = max(0, min(self.selected_row_index, len(rows) - 1))
+                self.selected_row_index = selected
+                self._select_sheet_row_preserve_column(selected)
+            self.sheet.refresh()
+            return
+
+        if self.table is None:
+            return
         self.table.delete(*self.table.get_children())
         self.table["columns"] = fields
+        default_widths = self._compute_default_column_widths(fields)
         for field in fields:
             self.table.heading(field, text=field)
-            self.table.column(field, width=max(120, min(300, len(field) * 12)), stretch=True)
+            width = self.column_widths_by_field.get(field, default_widths.get(field, 120))
+            self.table.column(field, width=width, stretch=False, minwidth=80)
         for index, row in enumerate(rows):
             self.table.insert(
-                "", tk.END, iid=str(index), values=[self._wrapped_cell_value(index, field) for field in fields]
+                "",
+                tk.END,
+                iid=str(index),
+                values=[str(row.get(field, "")) for field in fields],
+                tags=(self._row_tag(index),),
             )
         self._refresh_table_display()
 
-    def _on_row_height_change(self, _: tk.Event[Any] | None = None) -> None:
-        try:
-            value = int(self.row_height.get())
-        except (tk.TclError, ValueError):
+    def _on_table_frame_resize(self, _: tk.Event[Any]) -> None:
+        if self.result is None:
             return
-        value = max(24, min(value, 220))
-        self.row_height.set(value)
-        ttk.Style(self).configure(self.table_style_name, rowheight=value)
-        self._refresh_table_display()
+        if self._use_tksheet and self.sheet is not None and not self._manual_column_resize:
+            self._apply_sheet_column_widths(self.table_fields or self.result.fields)
+            self.sheet.refresh()
+        elif self.table is not None:
+            self._apply_treeview_column_widths(self.table_fields or self.result.fields)
 
     def _on_table_mousewheel(self, event: tk.Event[Any]) -> str:
+        if self.table is None:
+            return "break"
         delta = -1 if event.delta > 0 else 1
         self.table.yview_scroll(delta, "units")
         return "break"
 
     def _on_table_shift_mousewheel(self, event: tk.Event[Any]) -> str:
+        if self.table is None:
+            return "break"
         delta = -1 if event.delta > 0 else 1
         self.table.xview_scroll(delta, "units")
         return "break"
 
-    def _refresh_table_display(self, _: tk.Event[Any] | None = None) -> None:
+    def _compute_default_column_widths(self, fields: list[str]) -> dict[str, int]:
+        available = 900
+        self.update_idletasks()
+        if self.table_frame is not None:
+            available = max(360, self.table_frame.winfo_width() - 20)
+        if self._use_tksheet and self.sheet is not None:
+            # Exclude the row-index strip (row numbers) so percentage sizing targets
+            # only data columns.
+            index_width = self._sheet_row_index_width()
+            available = max(220, available - index_width)
+        if not fields:
+            return {}
+
+        def _normalized(name: str) -> str:
+            return "".join(ch for ch in name.lower() if ch.isalnum())
+
+        mapunit_field = next(
+            (field for field in fields if _normalized(field).startswith("mapunit")),
+            None,
+        )
+        description_field = next(
+            (field for field in fields if "description" in field.lower()),
+            None,
+        )
+
+        percentages: dict[str, float] = {}
+        reserved = 0.0
+        if mapunit_field is not None:
+            percentages[mapunit_field] = 0.05
+            reserved += 0.05
+        if description_field is not None and description_field != mapunit_field:
+            percentages[description_field] = 0.50
+            reserved += 0.50
+
+        remaining_fields = [field for field in fields if field not in percentages]
+        if remaining_fields:
+            remainder = max(0.0, 1.0 - reserved)
+            each = remainder / len(remaining_fields)
+            for field in remaining_fields:
+                percentages[field] = each
+        elif reserved > 0:
+            # Only special columns exist; normalize to 100%.
+            for field in list(percentages):
+                percentages[field] = percentages[field] / reserved
+        else:
+            equal = 1.0 / len(fields)
+            for field in fields:
+                percentages[field] = equal
+
+        widths = {field: max(60, int(round(available * percentages[field]))) for field in fields}
+        total = sum(widths.values())
+        if total != available and fields:
+            adjust_field = description_field or fields[-1]
+            widths[adjust_field] = max(60, widths[adjust_field] + (available - total))
+        return widths
+
+    def _sheet_row_index_width(self) -> int:
+        if self.sheet is None:
+            return 0
+        # Prefer live rendered width when available; fall back to configured default.
+        current_width = getattr(getattr(self.sheet, "RI", None), "current_width", None)
+        if isinstance(current_width, (int, float)):
+            return max(0, int(round(current_width)))
+        configured_width = getattr(getattr(self.sheet, "ops", None), "default_row_index_width", None)
+        if isinstance(configured_width, (int, float)):
+            return max(0, int(round(configured_width)))
+        return 30
+
+    def _apply_sheet_column_widths(self, fields: list[str]) -> None:
+        if self.sheet is None:
+            return
+        default_widths = self._compute_default_column_widths(fields)
+        widths = [self.column_widths_by_field.get(field, default_widths[field]) for field in fields]
+        self.sheet.set_column_widths(widths, reset=False)
+
+    def _apply_treeview_column_widths(self, fields: list[str]) -> None:
+        if self.table is None:
+            return
+        default_widths = self._compute_default_column_widths(fields)
+        for field in fields:
+            width = self.column_widths_by_field.get(field, default_widths[field])
+            self.table.column(field, width=width, stretch=False, minwidth=80)
+
+    def _snapshot_sheet_column_widths(self) -> None:
+        if self.sheet is None or not self.table_fields:
+            return
+        widths = self.sheet.get_column_widths()
+        if len(widths) != len(self.table_fields):
+            return
+        for field, width in zip(self.table_fields, widths):
+            self.column_widths_by_field[field] = int(width)
+
+    def _fit_rows_for_all(self, *, redraw: bool) -> None:
+        if self.sheet is None:
+            return
+        # Fit row heights to wrapped content under current column widths.
+        self.sheet.row_height("all", height="text", only_set_if_too_small=False, redraw=redraw)
+
+    def _auto_fit_rows(self) -> None:
+        if self.sheet is None:
+            return
+        self._fit_rows_for_all(redraw=True)
+
+    def _reset_column_widths(self) -> None:
         if self.result is None:
             return
-        fields = self.result.fields
+        self.column_widths_by_field = {}
+        self._manual_column_resize = False
+        if self._use_tksheet and self.sheet is not None:
+            self._apply_sheet_column_widths(self.table_fields or self.result.fields)
+            self._fit_rows_for_all(redraw=False)
+            self.sheet.refresh()
+        elif self.table is not None:
+            self._apply_treeview_column_widths(self.table_fields or self.result.fields)
+
+    def _refresh_table_display(self, _: tk.Event[Any] | None = None) -> None:
+        if self.result is None or self._use_tksheet:
+            return
+        if self.table is None:
+            return
+        fields = self.table_fields or self.result.fields
         for row_id in self.table.get_children():
             row_index = int(row_id)
             self.table.item(
                 row_id,
-                values=[self._wrapped_cell_value(row_index, field) for field in fields],
+                values=[str(self.rows[row_index].get(field, "")) for field in fields],
+                tags=(self._row_tag(row_index),),
             )
+        self.table.tag_configure("status_accepted", background="#E8F6E8")
+        self.table.tag_configure("status_needs_review", background="#FFF7DA")
+        self.table.tag_configure("status_bad_extraction", background="#FCE8E8")
 
-    def _wrapped_cell_value(self, row_index: int, field: str) -> str:
-        raw_value = str(self.rows[row_index].get(field, ""))
-        if not raw_value:
-            return ""
+    def _row_tag(self, row_index: int) -> str:
+        if row_index < 0 or row_index >= len(self.row_statuses):
+            return "status_needs_review"
+        return f"status_{self.row_statuses[row_index]}"
+
+    def _ensure_row_metadata_length(self) -> None:
+        while len(self.row_statuses) < len(self.rows):
+            self.row_statuses.append("needs_review")
+        while len(self.row_comments) < len(self.rows):
+            self.row_comments.append("")
+        if len(self.row_statuses) > len(self.rows):
+            self.row_statuses = self.row_statuses[: len(self.rows)]
+        if len(self.row_comments) > len(self.rows):
+            self.row_comments = self.row_comments[: len(self.rows)]
+
+    def _status_code_from_label(self, label: str) -> str:
+        normalized = label.strip().lower()
+        for code, code_label in self.row_status_labels.items():
+            if normalized == code_label:
+                return code
+        if normalized in self.row_status_options:
+            return normalized
+        return "needs_review"
+
+    def _status_label_from_code(self, code: str) -> str:
+        return self.row_status_labels.get(code, self.row_status_labels["needs_review"])
+
+    def _selected_row_from_sheet(self) -> int | None:
+        if self.sheet is None:
+            return None
         try:
-            column_width = int(self.table.column(field, option="width"))
-        except tk.TclError:
-            return raw_value
-        if column_width <= 20:
-            return raw_value
-        available_px = max(40, column_width - 12)
-        font = tkfont.nametofont("TkDefaultFont")
-        wrapped_sections: list[str] = []
-        for section in raw_value.splitlines() or [raw_value]:
-            words = section.split()
-            if not words:
-                wrapped_sections.append("")
-                continue
-            lines: list[str] = []
-            current: list[str] = []
-            for word in words:
-                trial = " ".join(current + [word])
-                if font.measure(trial) <= available_px:
-                    current.append(word)
+            selected = self.sheet.get_currently_selected()
+        except Exception:
+            selected = ()
+        if selected:
+            row_value = getattr(selected, "row", None)
+            if row_value is None and isinstance(selected, tuple) and len(selected) > 0:
+                row_value = selected[0]
+            if isinstance(row_value, int) and 0 <= row_value < len(self.rows):
+                return row_value
+        try:
+            row_indexes = self.sheet.get_selected_rows(return_tuple=True)
+        except Exception:
+            row_indexes = ()
+        if row_indexes:
+            row_value = row_indexes[0]
+            if isinstance(row_value, int) and 0 <= row_value < len(self.rows):
+                return row_value
+        return None
+
+    def _select_sheet_row_preserve_column(self, row_index: int) -> None:
+        if self.sheet is None:
+            return
+        try:
+            selected = self.sheet.get_currently_selected()
+        except Exception:
+            selected = ()
+        column = 0
+        selected_col = getattr(selected, "column", None)
+        if isinstance(selected_col, int) and selected_col >= 0:
+            column = selected_col
+        elif isinstance(selected, tuple) and len(selected) > 1 and isinstance(selected[1], int):
+            column = selected[1]
+        self.sheet.set_currently_selected(row_index, column)
+
+    def _set_selected_row(self, row_index: int | None, *, sync_widget: bool = True) -> None:
+        self.selected_row_index = row_index
+        if row_index is None:
+            self._sync_row_metadata_controls()
+            return
+        if sync_widget and self._use_tksheet and self.sheet is not None:
+            try:
+                self._select_sheet_row_preserve_column(row_index)
+            except Exception:
+                pass
+        elif sync_widget and self.table is not None:
+            iid = str(row_index)
+            if self.table.exists(iid):
+                self.table.selection_set(iid)
+                self.table.focus(iid)
+        self._sync_row_metadata_controls()
+
+    def _sync_row_metadata_controls(self) -> None:
+        self._ensure_row_metadata_length()
+        row_index = self.selected_row_index
+        if row_index is None or row_index < 0 or row_index >= len(self.rows):
+            self.row_status_var.set(self.row_status_labels["needs_review"])
+            self.row_comment_var.set("")
+            self._sync_status_dropdown_color()
+            return
+        self.row_status_var.set(self._status_label_from_code(self.row_statuses[row_index]))
+        self.row_comment_var.set(self.row_comments[row_index])
+        self._sync_status_dropdown_color()
+
+    def _active_profile_id(self) -> str:
+        if self.result is None:
+            return ""
+        profile_id = self.result.manifest.get("profile_id", "")
+        return str(profile_id) if profile_id is not None else ""
+
+    def _active_image_name(self) -> str:
+        if not self.image_path.get():
+            return ""
+        return Path(self.image_path.get()).name
+
+    def _record_feedback(
+        self,
+        *,
+        row_index: int | None,
+        field: str,
+        model_value: Any,
+        corrected_value: Any,
+        status: str,
+        comment: str,
+        event_type: str,
+    ) -> None:
+        if self.result is None:
+            return
+        self.feedback_records.append(
+            build_feedback_record(
+                run_id=self.result.run_id,
+                profile_id=self._active_profile_id(),
+                image=self._active_image_name(),
+                row_index=row_index,
+                field_name=field,
+                original_value=model_value,
+                corrected_value=corrected_value,
+                status=status,
+                comment=comment,
+                event_type=event_type,
+            )
+        )
+
+    def _on_treeview_select(self, _: tk.Event[Any]) -> None:
+        if self.table is None:
+            return
+        selection = self.table.selection()
+        if not selection:
+            self._set_selected_row(None)
+            return
+        self._set_selected_row(int(selection[0]))
+
+    def _on_sheet_end_edit_cell(self, event: Any) -> None:
+        if self.result is None or self.sheet is None:
+            return
+        row = event.get("row") if isinstance(event, dict) else None
+        column = event.get("column") if isinstance(event, dict) else None
+        if not isinstance(row, int) or not isinstance(column, int):
+            return
+        if row < 0 or row >= len(self.rows) or column < 0 or column >= len(self.table_fields):
+            return
+        field = self.table_fields[column]
+        corrected = event.get("value", event.get("text", ""))
+        corrected_text = "" if corrected is None else str(corrected)
+        previous = str(self.rows[row].get(field, ""))
+        if corrected_text == previous:
+            return
+        self.rows[row][field] = corrected_text
+        try:
+            self.sheet.row_height(row, height="text", only_set_if_too_small=False, redraw=False)
+        except Exception:
+            pass
+        self.sheet.refresh()
+        model_value = self.original_rows[row].get(field, "")
+        status = "accepted_with_minor_edit" if corrected_text != str(model_value) else "accepted"
+        self._record_feedback(
+            row_index=row,
+            field=field,
+            model_value=model_value,
+            corrected_value=corrected_text,
+            status=status,
+            comment=self.row_comments[row] if row < len(self.row_comments) else "",
+            event_type="cell_edit",
+        )
+        self._set_selected_row(row, sync_widget=False)
+        self._mark_unsaved()
+
+    def _on_sheet_end_paste(self, _: Any) -> None:
+        if self.sheet is None or self.result is None:
+            return
+        changed = False
+        changed_rows: set[int] = set()
+        data = self.sheet.get_sheet_data()
+        for row_index, row_values in enumerate(data):
+            if row_index >= len(self.rows):
+                break
+            for column_index, field in enumerate(self.table_fields):
+                if column_index >= len(row_values):
                     continue
-                if current:
-                    lines.append(" ".join(current))
-                    current = [word]
-                    continue
-                # Single long token: hard-wrap by character count fallback.
-                avg_char_px = max(1, font.measure("n"))
-                width_chars = max(4, available_px // avg_char_px)
-                lines.extend(textwrap.wrap(word, width=width_chars))
-                current = []
-            if current:
-                lines.append(" ".join(current))
-            wrapped_sections.append("\n".join(lines))
-        return "\n".join(wrapped_sections)
+                new_value = "" if row_values[column_index] is None else str(row_values[column_index])
+                if new_value != str(self.rows[row_index].get(field, "")):
+                    self.rows[row_index][field] = new_value
+                    changed = True
+                    changed_rows.add(row_index)
+        if changed:
+            for row_index in changed_rows:
+                try:
+                    self.sheet.row_height(row_index, height="text", only_set_if_too_small=False, redraw=False)
+                except Exception:
+                    pass
+            self.sheet.refresh()
+            self._mark_unsaved()
+
+    def _on_sheet_cell_select(self, event: Any) -> None:
+        row = event.get("row") if isinstance(event, dict) else None
+        if isinstance(row, int):
+            self._set_selected_row(row, sync_widget=False)
+
+    def _on_sheet_column_resize(self, event: Any) -> None:
+        _ = event
+        self._manual_column_resize = True
+        self._snapshot_sheet_column_widths()
+        self._fit_rows_for_all(redraw=False)
+        if self.sheet is not None:
+            self.sheet.refresh()
+
+    def _on_sheet_select_event(self, _: tk.Event[Any]) -> None:
+        row_index = self._selected_row_from_sheet()
+        self._set_selected_row(row_index, sync_widget=False)
 
     def _begin_cell_edit(self, event: tk.Event[Any]) -> None:
-        if self.result is None:
+        if self.result is None or self.table is None:
             return
         row_id = self.table.identify_row(event.y)
         column_id = self.table.identify_column(event.x)
@@ -754,6 +1302,7 @@ class ReviewWorkbench(tk.Tk):
         bbox = self.table.bbox(row_id, column_id)
         if not bbox:
             return
+        self._set_selected_row(int(row_id))
         original = self.rows[int(row_id)].get(field, "")
         dialog = tk.Toplevel(self)
         dialog.title(f"Edit row {int(row_id) + 1} | {field}")
@@ -779,29 +1328,168 @@ class ReviewWorkbench(tk.Tk):
                 self.rows[row_index][field] = corrected
                 self.table.item(
                     row_id,
-                    values=[self._wrapped_cell_value(row_index, name) for name in fields],
+                    values=[str(self.rows[row_index].get(name, "")) for name in fields],
                 )
-                self.feedback_records.append(
-                    build_feedback_record(
-                        run_id=self.result.run_id,
-                        row_index=row_index,
-                        field_name=field,
-                        original_value=original,
-                        corrected_value=corrected,
-                    )
+                model_value = self.original_rows[row_index].get(field, "")
+                status = "accepted_with_minor_edit" if corrected != str(model_value) else "accepted"
+                self._record_feedback(
+                    row_index=row_index,
+                    field=field,
+                    model_value=model_value,
+                    corrected_value=corrected,
+                    status=status,
+                    comment=self.row_comments[row_index] if row_index < len(self.row_comments) else "",
+                    event_type="cell_edit",
                 )
-                self.status.set(f"Edited row {row_index + 1}, field {field}.")
+                self._set_status_message(f"Edited row {row_index + 1}, field {field}.")
+                self._mark_unsaved()
             dialog.destroy()
 
         ttk.Button(controls, text="OK", command=commit).pack(side=tk.RIGHT)
         ttk.Button(controls, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=(4, 0))
         dialog.bind("<Escape>", lambda _: dialog.destroy())
         dialog.bind("<Control-Return>", lambda _: commit())
+        self._center_window(dialog)
+
+    def _apply_sheet_status_highlights(self) -> None:
+        if self.sheet is None:
+            return
+        for row_index, status in enumerate(self.row_statuses):
+            if status == "accepted":
+                fg = "#0E4D20"
+            elif status == "bad_extraction":
+                fg = "#6F0F0F"
+            else:
+                fg = "#6A4D00"
+            bg = self._status_color(status)
+            try:
+                self.sheet.highlight_rows(rows=[row_index], bg=bg, fg=fg, redraw=False)
+            except Exception:
+                return
+        try:
+            self.sheet.refresh()
+        except Exception:
+            pass
+
+    def _add_row(self) -> None:
+        if self.result is None:
+            messagebox.showinfo("No run", "Run extraction before editing rows.", parent=self)
+            return
+        insert_at = len(self.rows)
+        if self.selected_row_index is not None:
+            insert_at = self.selected_row_index + 1
+        blank_row = {field: "" for field in self.result.fields}
+        self.rows.insert(insert_at, blank_row)
+        self.original_rows.insert(insert_at, dict(blank_row))
+        self.row_statuses.insert(insert_at, "needs_review")
+        self.row_comments.insert(insert_at, "")
+        self._configure_table(self.result.fields, self.rows)
+        self._set_selected_row(insert_at)
+        self._record_feedback(
+            row_index=insert_at,
+            field="__row__",
+            model_value="",
+            corrected_value="added",
+            status="needs_review",
+            comment="Row added by reviewer",
+            event_type="row_added",
+        )
+        self._mark_unsaved()
+
+    def _delete_selected_row(self) -> None:
+        if self.result is None:
+            messagebox.showinfo("No run", "Run extraction before editing rows.", parent=self)
+            return
+        row_index = self.selected_row_index
+        if row_index is None or row_index < 0 or row_index >= len(self.rows):
+            messagebox.showinfo("No row selected", "Select a row to delete.", parent=self)
+            return
+        removed_row = self.rows.pop(row_index)
+        self.original_rows.pop(row_index)
+        removed_status = self.row_statuses.pop(row_index)
+        removed_comment = self.row_comments.pop(row_index)
+        self._configure_table(self.result.fields, self.rows)
+        next_selection = row_index if row_index < len(self.rows) else len(self.rows) - 1
+        self._set_selected_row(next_selection if next_selection >= 0 else None)
+        self._record_feedback(
+            row_index=row_index,
+            field="__row__",
+            model_value=removed_row,
+            corrected_value="deleted",
+            status=removed_status,
+            comment=removed_comment,
+            event_type="row_deleted",
+        )
+        self._mark_unsaved()
+
+    def _move_selected_row(self, step: int) -> None:
+        if self.result is None:
+            messagebox.showinfo("No run", "Run extraction before editing rows.", parent=self)
+            return
+        row_index = self.selected_row_index
+        if row_index is None or row_index < 0 or row_index >= len(self.rows):
+            messagebox.showinfo("No row selected", "Select a row to reorder.", parent=self)
+            return
+        target = row_index + step
+        if target < 0 or target >= len(self.rows):
+            return
+        self.rows[row_index], self.rows[target] = self.rows[target], self.rows[row_index]
+        self.original_rows[row_index], self.original_rows[target] = (
+            self.original_rows[target],
+            self.original_rows[row_index],
+        )
+        self.row_statuses[row_index], self.row_statuses[target] = (
+            self.row_statuses[target],
+            self.row_statuses[row_index],
+        )
+        self.row_comments[row_index], self.row_comments[target] = (
+            self.row_comments[target],
+            self.row_comments[row_index],
+        )
+        self._configure_table(self.result.fields, self.rows)
+        self._set_selected_row(target)
+        self._record_feedback(
+            row_index=target,
+            field="__row__",
+            model_value=row_index,
+            corrected_value=target,
+            status=self.row_statuses[target],
+            comment="Row reordered by reviewer",
+            event_type="row_reordered",
+        )
+        self._mark_unsaved()
+
+    def _apply_selected_row_metadata(self, _: tk.Event[Any] | None = None) -> None:
+        row_index = self.selected_row_index
+        if row_index is None or row_index < 0 or row_index >= len(self.rows):
+            return
+        new_status = self._status_code_from_label(self.row_status_var.get())
+        new_comment = self.row_comment_var.get().strip()
+        previous_status = self.row_statuses[row_index]
+        previous_comment = self.row_comments[row_index]
+        self.row_statuses[row_index] = new_status
+        self.row_comments[row_index] = new_comment
+        if previous_status != new_status or previous_comment != new_comment:
+            self._record_feedback(
+                row_index=row_index,
+                field="__row__",
+                model_value=previous_status,
+                corrected_value=new_status,
+                status=new_status,
+                comment=new_comment,
+                event_type="row_metadata",
+            )
+            self._mark_unsaved()
+        if self._use_tksheet:
+            self._apply_sheet_status_highlights()
+        else:
+            self._refresh_table_display()
+        self._sync_status_dropdown_color()
 
     def _show_help(self) -> None:
         help_path = self._repo_root() / "README.md"
         if not help_path.exists():
-            messagebox.showerror("Help unavailable", f"Could not find {help_path}.")
+            messagebox.showerror("Help unavailable", f"Could not find {help_path}.", parent=self)
             return
         help_window = tk.Toplevel(self)
         help_window.title("Help and Workflow")
@@ -811,25 +1499,227 @@ class ReviewWorkbench(tk.Tk):
         body.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         body.insert("1.0", help_path.read_text(encoding="utf-8"))
         body.configure(state="disabled")
+        self._center_window(help_window)
+
+    def _load_project(self) -> None:
+        initial_dir = self.result.run_dir if self.result is not None else Path(self.output_dir.get())
+        selected = filedialog.askdirectory(initialdir=str(initial_dir))
+        if not selected:
+            return
+        run_dir = Path(selected)
+        manifest_path = run_dir / "manifest.json"
+        if not manifest_path.exists():
+            messagebox.showerror(
+                "Invalid project folder",
+                "Selected folder does not contain manifest.json.",
+                parent=self,
+            )
+            return
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_outputs = manifest.get("output_paths", {})
+        output_paths = review_output_paths(run_dir)
+        if isinstance(manifest_outputs, dict):
+            for key, value in manifest_outputs.items():
+                if isinstance(value, str):
+                    output_paths[key] = Path(value)
+
+        extracted_json = output_paths.get("extracted_json", run_dir / "extracted.json")
+        corrected_json = output_paths.get("corrected_json", run_dir / "corrected.json")
+        data_path = corrected_json if corrected_json.exists() else extracted_json
+        if not data_path.exists():
+            messagebox.showerror(
+                "Invalid project folder",
+                "Could not find extracted.json or corrected.json in the selected folder.",
+                parent=self,
+            )
+            return
+
+        loaded_data = json.loads(data_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded_data, dict):
+            messagebox.showerror("Invalid project data", "Project JSON is malformed.", parent=self)
+            return
+        fields = loaded_data.get("fields", [])
+        rows = loaded_data.get("rows", [])
+        if not isinstance(fields, list) or not isinstance(rows, list):
+            messagebox.showerror("Invalid project data", "Project fields/rows are malformed.", parent=self)
+            return
+
+        original_rows: list[dict[str, Any]] = []
+        if extracted_json.exists():
+            extracted_data = json.loads(extracted_json.read_text(encoding="utf-8"))
+            if isinstance(extracted_data, dict) and isinstance(extracted_data.get("rows"), list):
+                original_rows = [
+                    {field: row.get(field, "") for field in fields}
+                    for row in extracted_data.get("rows", [])
+                    if isinstance(row, dict)
+                ]
+        if not original_rows:
+            original_rows = [{field: row.get(field, "") for field in fields} for row in rows if isinstance(row, dict)]
+
+        normalized_rows = [
+            {field: row.get(field, "") for field in fields}
+            for row in rows
+            if isinstance(row, dict)
+        ]
+        if len(original_rows) < len(normalized_rows):
+            original_rows.extend(
+                [{field: "" for field in fields} for _ in range(len(normalized_rows) - len(original_rows))]
+            )
+        original_rows = original_rows[: len(normalized_rows)]
+
+        feedback_path = output_paths.get("feedback", run_dir / "feedback.jsonl")
+        loaded_feedback: list[dict[str, Any]] = []
+        if feedback_path.exists():
+            for line in feedback_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    loaded_feedback.append(item)
+
+        statuses = ["needs_review"] * len(normalized_rows)
+        comments = [""] * len(normalized_rows)
+        for record in loaded_feedback:
+            row_index = record.get("row_index")
+            if not isinstance(row_index, int) or row_index < 0 or row_index >= len(statuses):
+                continue
+            status = str(record.get("status", "needs_review"))
+            if status == "accepted_with_minor_edit":
+                status = "accepted"
+            if status in self.row_status_options:
+                statuses[row_index] = status
+            comment = str(record.get("comment", "")).strip()
+            if comment:
+                comments[row_index] = comment
+
+        usage = {
+            "input_tokens": manifest.get("input_tokens") if isinstance(manifest.get("input_tokens"), int) else None,
+            "output_tokens": manifest.get("output_tokens") if isinstance(manifest.get("output_tokens"), int) else None,
+            "total_tokens": manifest.get("total_tokens") if isinstance(manifest.get("total_tokens"), int) else None,
+            "cached_tokens": manifest.get("cached_tokens") if isinstance(manifest.get("cached_tokens"), int) else None,
+            "reasoning_tokens": manifest.get("reasoning_tokens")
+            if isinstance(manifest.get("reasoning_tokens"), int)
+            else None,
+        }
+
+        result = ExtractionJobResult(
+            run_id=str(manifest.get("run_id", run_dir.name)),
+            run_dir=run_dir,
+            fields=[str(field) for field in fields],
+            rows=original_rows,
+            manifest=manifest,
+            output_paths=output_paths,
+            dry_run=manifest.get("api_call_mode") == "dry_run",
+            cache_reused=manifest.get("api_call_mode") == "cache_reuse",
+            request_fingerprint=str(manifest.get("request_fingerprint", "")),
+            rough_image_tokens=int(manifest.get("rough_image_tokens_estimate", 0) or 0),
+            usage=usage,
+            elapsed_seconds=float(manifest.get("elapsed_seconds", 0.0) or 0.0),
+            estimated_cost_usd=float(manifest.get("estimated_cost_usd"))
+            if isinstance(manifest.get("estimated_cost_usd"), (int, float))
+            else None,
+            warnings=[str(item) for item in manifest.get("warnings", []) if isinstance(item, str)],
+        )
+
+        self.result = result
+        self.rows = normalized_rows
+        self.original_rows = original_rows
+        self.feedback_records = loaded_feedback
+        self.row_statuses = statuses
+        self.row_comments = comments
+        self.selected_row_index = 0 if self.rows else None
+        self.column_widths_by_field = {}
+        self._manual_column_resize = False
+        self.has_unsaved_changes = False
+
+        profile_id = str(manifest.get("profile_id", "")).strip()
+        if profile_id:
+            self.profile_path.set(
+                self._display_path(self._profiles_dir() / f"{profile_id}.yml")
+            )
+
+        source_image_path = Path(str(manifest.get("source_image_path", "")))
+        if source_image_path.exists():
+            self.image_path.set(self._display_path(source_image_path))
+            self._load_preview(source_image_path)
+        elif output_paths.get("source_image") and output_paths["source_image"].exists():
+            self.image_path.set(self._display_path(output_paths["source_image"]))
+            self._load_preview(output_paths["source_image"])
+
+        self._configure_table(result.fields, self.rows)
+        self._sync_row_metadata_controls()
+        notes_path = output_paths.get("notes", run_dir / "notes.md")
+        self.notes.delete("1.0", tk.END)
+        if notes_path.exists():
+            self.notes.insert("1.0", notes_path.read_text(encoding="utf-8"))
+        self.notes.edit_modified(False)
+        self.has_unsaved_changes = False
+        self._set_status_message(f"Project loaded: {result.run_id}")
 
     def _save_corrected(self) -> None:
         if self.result is None:
-            messagebox.showinfo("No run", "Run extraction before saving corrections.")
+            messagebox.showinfo("No run", "Run extraction before saving corrections.", parent=self)
             return
+        if self._use_tksheet and self.sheet is not None:
+            try:
+                self.sheet.close_text_editor()
+            except Exception:
+                pass
+            sheet_data = self.sheet.get_sheet_data()
+            for row_index, row_values in enumerate(sheet_data):
+                if row_index >= len(self.rows):
+                    break
+                for column_index, field in enumerate(self.result.fields):
+                    if column_index >= len(row_values):
+                        continue
+                    self.rows[row_index][field] = "" if row_values[column_index] is None else str(
+                        row_values[column_index]
+                    )
         notes_text = self.notes.get("1.0", tk.END).rstrip() + "\n"
         Path(self.result.output_paths["notes"]).write_text(notes_text, encoding="utf-8")
         note_body = notes_text.strip()
         records = list(self.feedback_records)
+        self._ensure_row_metadata_length()
+        for row_index, row in enumerate(self.rows):
+            row_status = self.row_statuses[row_index]
+            row_comment = self.row_comments[row_index]
+            for field in self.result.fields:
+                model_value = self.original_rows[row_index].get(field, "")
+                corrected_value = row.get(field, "")
+                derived_status = row_status
+                if row_status == "accepted" and str(corrected_value) != str(model_value):
+                    derived_status = "accepted_with_minor_edit"
+                records.append(
+                    build_feedback_record(
+                        run_id=self.result.run_id,
+                        profile_id=self._active_profile_id(),
+                        image=self._active_image_name(),
+                        row_index=row_index,
+                        field_name=field,
+                        original_value=model_value,
+                        corrected_value=corrected_value,
+                        status=derived_status,
+                        comment=row_comment,
+                        event_type="final_review",
+                    )
+                )
         if note_body:
             records.append(
                 build_feedback_record(
                     run_id=self.result.run_id,
+                    profile_id=self._active_profile_id(),
+                    image=self._active_image_name(),
                     row_index=None,
                     field_name="notes",
                     original_value="",
                     corrected_value=note_body,
                     status="note",
                     comment="User review note",
+                    event_type="note",
                 )
             )
         write_corrected_outputs(
@@ -839,11 +1729,12 @@ class ReviewWorkbench(tk.Tk):
             json_path=self.result.output_paths["corrected_json"],
         )
         write_feedback_jsonl(records, self.result.output_paths["feedback"])
-        self.status.set(f"Saved corrected outputs in {self.result.run_dir}")
+        self._mark_saved()
+        self._set_status_message(f"Saved project in {self.result.run_dir}")
 
     def _promote_corrected(self) -> None:
         if self.result is None:
-            messagebox.showinfo("No run", "Run extraction before promoting corrected outputs.")
+            messagebox.showinfo("No run", "Run extraction before promoting corrected outputs.", parent=self)
             return
         corrected_csv = self.result.output_paths["corrected_csv"]
         corrected_json = self.result.output_paths["corrected_json"]
@@ -851,6 +1742,7 @@ class ReviewWorkbench(tk.Tk):
             messagebox.showinfo(
                 "No corrected outputs",
                 "Save corrected outputs first, then promote them.",
+                parent=self,
             )
             return
         target = promote_corrected_to_gold(
@@ -859,7 +1751,7 @@ class ReviewWorkbench(tk.Tk):
             corrected_json_path=corrected_json,
             corrected_csv_path=corrected_csv,
         )
-        self.status.set(f"Promoted corrected outputs to {target}")
+        self._set_status_message(f"Promoted corrected outputs to {target}")
 
     def _open_output_folder(self) -> None:
         path = self.result.run_dir if self.result else Path(self.output_dir.get())
@@ -870,10 +1762,10 @@ class ReviewWorkbench(tk.Tk):
                 subprocess.run(["open", str(path)], check=False)
             else:
                 subprocess.run(["xdg-open", str(path)], check=False)
-            self.status.set(f"Opened {path}")
+            self._set_status_message(f"Opened {path}")
         except Exception as exc:  # noqa: BLE001 - GUI should surface platform opener failures.
-            self.status.set(f"Could not open folder: {exc}")
-            messagebox.showerror("Open folder failed", str(exc))
+            self._set_status_message(f"Could not open folder: {exc}")
+            messagebox.showerror("Open folder failed", str(exc), parent=self)
 
 
 def main() -> None:

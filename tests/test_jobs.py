@@ -127,6 +127,8 @@ def test_run_extraction_job_writes_manifest(tmp_path: Path, monkeypatch) -> None
     assert manifest["total_tokens"] == 1200
     assert manifest["cached_tokens"] == 100
     assert manifest["reasoning_tokens"] == 150
+    assert isinstance(manifest["elapsed_seconds"], float)
+    assert manifest["elapsed_seconds"] >= 0.0
     assert manifest["estimated_cost_usd"] is not None
     assert "package_version" in manifest
 
@@ -320,3 +322,33 @@ def test_write_feedback_jsonl_writes_one_object_per_line(tmp_path: Path) -> None
 
     lines = (tmp_path / "feedback.jsonl").read_text(encoding="utf-8").splitlines()
     assert [json.loads(line) for line in lines] == records
+
+
+def test_build_feedback_record_includes_structured_review_fields() -> None:
+    record = build_feedback_record(
+        run_id="run-2",
+        profile_id="water_production",
+        image="108056_7-DMU.png",
+        row_index=1,
+        field_name="Description",
+        original_value="Model value",
+        corrected_value="Corrected value",
+        status="accepted_with_minor_edit",
+        comment="Model handled line wrapping correctly.",
+        event_type="final_review",
+        timestamp="2026-05-07T10:15:00+00:00",
+    )
+
+    assert record["run_id"] == "run-2"
+    assert record["profile_id"] == "water_production"
+    assert record["image"] == "108056_7-DMU.png"
+    assert record["field"] == "Description"
+    assert record["model_value"] == "Model value"
+    assert record["corrected_value"] == "Corrected value"
+    assert record["status"] == "accepted_with_minor_edit"
+    assert record["comment"] == "Model handled line wrapping correctly."
+    assert record["event_type"] == "final_review"
+    assert record["timestamp"] == "2026-05-07T10:15:00+00:00"
+    # Backward compatibility for earlier consumers.
+    assert record["field_name"] == "Description"
+    assert record["original_value"] == "Model value"
