@@ -54,7 +54,7 @@ class ReviewWorkbench(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Geologic Map Explanation Extraction Review Workbench")
-        self.geometry("1200x800")
+        self.geometry("1440x810")
         self._load_environment()
 
         self.image_path = tk.StringVar()
@@ -314,6 +314,19 @@ class ReviewWorkbench(tk.Tk):
         self._path_row(top, "Image:", self.image_path, self._browse_image, row=0)
         self._profile_row(top, row=1)
         self._path_row(top, "Output:", self.output_dir, self._browse_output, row=2)
+        
+        ttk.Button(top, text="Help", command=self._show_help).grid(
+            row=0, column=9, sticky="we", ipadx=4
+        )
+        ttk.Checkbutton(top, text="Use profile notes", variable=self.include_profile_notes).grid(
+            row=1, column=9, sticky="w", pady=2
+        )
+        ttk.Button(top, text="Open output folder", command=self._open_output_folder).grid(
+            row=2, column=9, sticky="we", ipadx=4
+        )
+        ttk.Button(top, text="Set API key...", command=self._prompt_api_key_override).grid(
+            row=4, column=3, sticky="e", padx=2, ipadx=4
+        )
 
         ttk.Label(top, text="Model:").grid(row=3, column=0, sticky="w", padx=(0, 4), pady=2)
         ttk.Combobox(
@@ -338,16 +351,7 @@ class ReviewWorkbench(tk.Tk):
             width=8,
             state="readonly",
         ).grid(row=5, column=1, sticky="w", padx=2, pady=2)
-        ttk.Label(top, text="Max output tokens:").grid(row=4, column=2, sticky="e", padx=(12, 2), pady=2)
-        ttk.Entry(top, textvariable=self.max_output_tokens, width=10).grid(
-            row=4, column=3, sticky="w", padx=2, pady=2
-        )
-        ttk.Button(top, text="Set API key...", command=self._prompt_api_key_override).grid(
-            row=3, column=9, padx=0, ipadx=4
-        )
-        ttk.Checkbutton(top, text="Include profile notes", variable=self.include_profile_notes).grid(
-            row=1, column=9, sticky="w", pady=2
-        )
+
         ttk.Label(top, text="API call options:").grid(row=3, column=3, sticky="e", padx=(20, 0), pady=2)
         ttk.Checkbutton(top, text="Dry run (no API call)", variable=self.dry_run).grid(
             row=3, column=4, sticky="w", pady=2, padx=4
@@ -358,24 +362,25 @@ class ReviewWorkbench(tk.Tk):
         ttk.Checkbutton(top, text="Segmented mode (higher cost)", variable=self.segmented_mode).grid(
             row=3, column=6, sticky="w", pady=2, padx=(4,50)
         )
-        ttk.Checkbutton(top, text="Apply output token limit", variable=self.use_max_output_tokens_limit).grid(
-            row=4, column=4, columnspan=2, sticky="w", pady=2, padx=4
+        ttk.Checkbutton(top, text="Apply maximum output token limit:", variable=self.use_max_output_tokens_limit).grid(
+            row=4, column=4, columnspan=2, sticky="e", pady=2
         )
+        ttk.Entry(top, textvariable=self.max_output_tokens, width=10).grid(
+            row=4, column=6, sticky="w", padx=0, pady=2
+        )
+
         self.run_button = ttk.Button(top, text="Run extraction", command=self._run_extraction)
-        self.run_button.grid(row=5, column=4, sticky="we", padx=4, ipadx=4)
+        self.run_button.grid(row=5, column=6, sticky="we", padx=(4,0), ipadx=20)
+
         ttk.Button(top, text="Load project", command=self._load_project).grid(
-            row=5, column=5, sticky="we", padx=4, ipadx=4
-        )
-        ttk.Button(top, text="Open output folder", command=self._open_output_folder).grid(
-            row=5, column=6, columnspan=2, sticky="e", padx=4
+            row=5, column=10, padx=2, ipadx=4
         )
         ttk.Button(top, text="Save project", command=self._save_corrected).grid(
-            row=5, column=8, padx=4
+            row=5, column=11, padx=2, ipadx=4
         )
         ttk.Button(top, text="Promote corrected", command=self._promote_corrected).grid(
-            row=5, column=9, padx=4
+            row=5, column=12, padx=(50,0), ipadx=4
         )
-        ttk.Button(top, text="Help", command=self._show_help).grid(row=0, column=9, padx=4)
         top.columnconfigure(1, weight=1)
 
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
