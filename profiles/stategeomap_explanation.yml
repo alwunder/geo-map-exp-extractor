@@ -26,6 +26,6 @@ special_instructions:
   - Age and group braces may be located on either side of a description or column and can be nested
   - FullName should include the group name when visually indicated.
   - Use semicolon delimiter for "Group; Formation" and for Age (if applicable).
-  - Precisely transcribe all text. Unreadable text should be indicated.
+  - Literally transcribe descriptive text. Unreadable text should be indicated.
   - Leave fields blank when they do not apply or are not visible.
   - AreaFillRGB should be dash-delimited and derived from the average RGB value within the MapUnit color chip.
