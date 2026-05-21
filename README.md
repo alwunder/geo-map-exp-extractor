@@ -148,12 +148,12 @@ It records `model`, `reasoning_effort`, `image_detail`, and `max_output_tokens` 
 
 ## Model selection guidance
 
-Use case                                     | Model                  | Reasoning effort | Image detail
----------------------------------------------|------------------------|------------------|-------------
-Cheap quick test                             | gpt-5.4-mini           | low or medium    |     high
-Normal production extraction                 | gpt-5.5                | medium           |     high
-Difficult panel / poor scan / complex layout | gpt-5.5                | high             |     high
-Very difficult audit/review pass             | gpt-5.5-pro or gpt-5.5 | high or xhigh    |     high
+| Use case                                     | Model                  | Reasoning effort | Image detail |
+|----------------------------------------------|------------------------|------------------|--------------|
+| Cheap quick test                             | gpt-5.4-mini           | low or medium    | high         |
+| Normal production extraction                 | gpt-5.5                | medium           | high         |
+| Difficult panel / poor scan / complex layout | gpt-5.5                | high             | high         |
+| Very difficult audit/review pass             | gpt-5.5-pro or gpt-5.5 | high or xhigh    | high         |
 
 `chat-latest` is available only as an experimental option; production runs should prefer fixed model names.
 
