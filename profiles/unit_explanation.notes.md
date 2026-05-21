@@ -1,0 +1,2 @@
+MapUnit boxes that include two or more unit abbreviations should have each abbreviation listed on its own line in the output
+If AreaFillRGB is included in the fields, it should be dash-delimited and derived from the average RGB value within the MapUnit color chip for each abbreviation.
