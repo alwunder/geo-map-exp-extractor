@@ -1,0 +1,31 @@
+id: stategeomap_explanation
+name: State geologic map explanation
+
+task_label: Map unit explanation contents
+model: gpt-5.5
+reasoning_effort: medium
+image_detail: high
+max_output_tokens: 12000
+
+fields:
+  - PhysiographicProvince
+  - MapUnit
+  - AreaFillRGB
+  - Name
+  - FullName
+  - Age
+  - Description
+
+include_intro_footnotes: true
+preserve_wording: true
+normalize_line_breaks: true
+normalize_hyphenated_line_breaks: true
+
+special_instructions:
+  - Interpret the visual grouping of the stratigraphic column to determine which text belongs to each map unit.
+  - Age and group braces may be located on either side of a description or column and can be nested
+  - FullName should include the group name when visually indicated.
+  - Use semicolon delimiter for "Group; Formation" and for Age (if applicable).
+  - Literally transcribe descriptive text. Unreadable text should be indicated.
+  - Leave fields blank when they do not apply or are not visible.
+  - AreaFillRGB should be dash-delimited and derived from the average RGB value within the MapUnit color chip.
