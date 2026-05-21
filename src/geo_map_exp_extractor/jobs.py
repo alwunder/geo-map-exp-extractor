@@ -56,6 +56,7 @@ class ExtractionJobResult:
     request_fingerprint: str
     rough_image_tokens: int
     usage: dict[str, int | None]
+    elapsed_seconds: float
     estimated_cost_usd: float | None
     warnings: list[str]
 
@@ -242,6 +243,7 @@ def build_review_manifest(
     request_hash: str,
     api_call_mode: str,
     usage: dict[str, int | None],
+    elapsed_seconds: float,
     estimated_cost_usd: float | None,
     segmented_mode: bool,
     segment_settings: dict[str, int] | None,
@@ -285,6 +287,7 @@ def build_review_manifest(
         "total_tokens": usage.get("total_tokens"),
         "cached_tokens": usage.get("cached_tokens"),
         "reasoning_tokens": usage.get("reasoning_tokens"),
+        "elapsed_seconds": elapsed_seconds,
         "estimated_cost_usd": estimated_cost_usd,
         "warnings": warnings,
         "rough_image_tokens_estimate": prepared_image.rough_image_tokens,
@@ -331,15 +334,29 @@ def build_feedback_record(
     corrected_value: Any,
     status: str = "corrected",
     comment: str = "",
+    profile_id: str = "",
+    image: str = "",
+    event_type: str = "cell_feedback",
+    timestamp: str | None = None,
 ) -> dict[str, Any]:
     """Build one lightweight correction-tracking JSON object."""
 
+    captured_at = timestamp or datetime.now(timezone.utc).isoformat()
+    model_value = "" if original_value is None else str(original_value)
+    final_value = "" if corrected_value is None else str(corrected_value)
     return {
+        "timestamp": captured_at,
+        "event_type": event_type,
         "run_id": run_id,
+        "profile_id": profile_id,
+        "image": image,
         "row_index": row_index,
+        "field": field_name,
+        "model_value": model_value,
+        "corrected_value": final_value,
+        # Backward-compatible aliases for older parsers/tests.
         "field_name": field_name,
-        "original_value": "" if original_value is None else str(original_value),
-        "corrected_value": "" if corrected_value is None else str(corrected_value),
+        "original_value": model_value,
         "status": status,
         "comment": comment,
     }
@@ -400,6 +417,7 @@ def run_extraction_job(
     destination.mkdir(parents=True, exist_ok=True)
 
     created_at = timestamp or datetime.now(timezone.utc)
+    started_at = datetime.now(timezone.utc)
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
     timestamp_text = created_at.astimezone(timezone.utc).isoformat()
@@ -631,6 +649,7 @@ def run_extraction_job(
         )
 
     usage = _usage_to_dict(extraction)
+    elapsed_seconds = max(0.0, (datetime.now(timezone.utc) - started_at).total_seconds())
     estimated_cost = estimate_cost_usd(
         model=selected_model,
         input_tokens=usage.get("input_tokens"),
@@ -653,6 +672,7 @@ def run_extraction_job(
         request_hash=request_hash,
         api_call_mode=api_call_mode,
         usage=usage,
+        elapsed_seconds=elapsed_seconds,
         estimated_cost_usd=estimated_cost,
         segmented_mode=segmented_mode,
         segment_settings=(
@@ -678,6 +698,7 @@ def run_extraction_job(
         request_fingerprint=request_hash,
         rough_image_tokens=prepared.rough_image_tokens,
         usage=usage,
+        elapsed_seconds=elapsed_seconds,
         estimated_cost_usd=estimated_cost,
         warnings=run_warnings,
     )
