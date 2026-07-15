@@ -1,0 +1,356 @@
+{
+  "fields": [
+    "MapUnit",
+    "Name",
+    "FullName",
+    "Age",
+    "Thickness",
+    "Description"
+  ],
+  "rows": [
+    {
+      "MapUnit": "af",
+      "Name": "Artificial Fill",
+      "FullName": "Artificial Fill",
+      "Age": "Quaternary; Pleistocene and Holocene",
+      "Thickness": "0-240",
+      "Description": "Stable fill on gentle slopes, and stabilized engineered structures."
+    },
+    {
+      "MapUnit": "Qal",
+      "Name": "Alluvium",
+      "FullName": "Alluvium",
+      "Age": "Quaternary; Pleistocene and Holocene",
+      "Thickness": "0-20",
+      "Description": "Clay, silt, sand, and gravel unconsolidated stream deposits."
+    },
+    {
+      "MapUnit": "Qc",
+      "Name": "Colluvium",
+      "FullName": "Colluvium",
+      "Age": "Quaternary; Pleistocene and Holocene",
+      "Thickness": "0-30",
+      "Description": "Boulders, angular to sub-rounded, clay and sand matrix, in unconsolidated slope deposits."
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Breathitt Formation",
+      "FullName": "Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "3300+",
+      "Description": "Shale, silty, gray, (weathers brown), occasionally laminated, often micaceous with abundant macerated plant remains. Siltstone, dark-gray to light-gray, (weathers yellowish-brown), massive to bedded. Fossil leaf, stem imprints, and siderite nodules common. Clay shale, medium-gray to black, (weathers yellowish-brown), often contains fossil plant imprints and siderite nodules. Sandstone, very light-gray to gray, fine- to coarse-grained, thin-bedded to massive, usually in multiple crosslaminated beds up to 40 feet thick. Sandstones in higher parts of the formation are often impure, gray, speckled with lithic fragments and mica, and occur in beds up to 100 feet thick. All sandstones are discontinuous laterally and may pinch or feather out abruptly. Underclay, light- to medium-gray, commonly silty, contains abundant Stigmaria, ranges up to three feet in thickness, commonly underlying coal beds. Magoffin zone is a thin shale bed containing abundant productid brachiopods, gastropods, cephalopods, and ostracods at the base of a coarsening upwards sequence of shale and siltstone."
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Magoffin zone",
+      "FullName": "Magoffin zone, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Unnamed coal",
+      "FullName": "Unnamed coal, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "21\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Hignite coal",
+      "FullName": "Hignite coal, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "18-51\"; 28\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Stray coal zone",
+      "FullName": "Stray coal zone, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "12\"; 10\"; 18\"; 10\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Sterling coal",
+      "FullName": "Sterling coal, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "30-68\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Poplar Lick coal",
+      "FullName": "Poplar Lick coal, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "10-12\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Buckeye Springs coal",
+      "FullName": "Buckeye Springs coal, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "21-41\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Mingo coal zone",
+      "FullName": "Mingo coal zone, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "8-18\"; 30-60\"; 0-20\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Rich Mtn. coal",
+      "FullName": "Rich Mtn. coal, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "27?\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Kent coal",
+      "FullName": "Kent coal, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "12\"; 24-48\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Pb",
+      "Name": "Neese coal",
+      "FullName": "Neese coal, Breathitt Formation",
+      "Age": "Pennsylvanian; Lower and Middle Pennsylvanian",
+      "Thickness": "10\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Plu",
+      "Name": "Upper Member of Lee Formation",
+      "FullName": "Lee Formation, Upper Member",
+      "Age": "Pennsylvanian; Lower Pennsylvanian",
+      "Thickness": "450-650",
+      "Description": "Sandstone, mostly light-gray (weathers brown), fine- to medium-grained, micaceous; some units are light-gray to white, (weather yellowish-brown to white), crossbedded; fine- to coarse-grained, quartzose, commonly nonconglomeratic, and forming prominent outcrops. Siltstone, argillaceous to sandy, gray, (weathers grayish-brown to brown), laminated, poorly exposed. Shale, silty, in places very dark-gray and carbonaceous. Coal not exposed in this quadrangle."
+    },
+    {
+      "MapUnit": "PMlm",
+      "Name": "Middle Member of Lee Formation",
+      "FullName": "Lee Formation, Middle Member",
+      "Age": "Pennsylvanian; Lower Pennsylvanian",
+      "Thickness": "500-600",
+      "Description": "Sandstone, white to very light-gray, fine- to coarse-grained, quartzose, massive, crossbedded, conglomeratic with well-rounded quartz pebbles commonly 1/2 to 1 inch in diameter. Locally, member is divided into 4 conglomeratic sandstone ledges by less resistant sandstone and shale; forms prominent cliffs and hogbacks on northwest slope of Cumberland Mountain."
+    },
+    {
+      "MapUnit": "PMll",
+      "Name": "Lower Member of Lee Formation",
+      "FullName": "Lee Formation, Lower Member",
+      "Age": "Lower Pennsylvanian and Upper Mississippian",
+      "Thickness": "380-430",
+      "Description": "Shale, medium dark-gray to light olive-gray, includes several coal beds and underclays in upper part. Sandstone, very light-gray to white, (weathers gray to buff), fine- to coarse-grained, quartzose, not conglomeratic in this quadrangle, crossbedded; forms prominent bluff."
+    },
+    {
+      "MapUnit": "PMll",
+      "Name": "Cumberland Gap coal",
+      "FullName": "Cumberland Gap coal, Lee Formation, Lower Member",
+      "Age": "Lower Pennsylvanian and Upper Mississippian",
+      "Thickness": "12\"; 22\"; 12\"",
+      "Description": ""
+    },
+    {
+      "MapUnit": "Mpo",
+      "Name": "Pinnacle Overlook Member of Lee Formation",
+      "FullName": "Lee Formation, Pinnacle Overlook Member",
+      "Age": "Upper Mississippian",
+      "Thickness": "20-80",
+      "Description": "Sandstone, white to very light-gray, fine- to coarse-grained, quartzose, crossbedded, thick-bedded to massive partly conglomeratic with well-rounded quartz pebbles about 1/2 inch in diameter."
+    },
+    {
+      "MapUnit": "Mp",
+      "Name": "Pennington Formation",
+      "FullName": "Pennington Formation",
+      "Age": "Mississippian; Upper Mississippian",
+      "Thickness": "400+",
+      "Description": "Sandstone, very light-gray to light olive-gray, (weathers gray or brown), fine-grained, ripple-bedded with abundant argillaceous laminae. Sandstone light-gray, (weathers brown to buff), medium-grained, massive-bedded, crossbedded, and forms prominent bluffs. Also present are a few beds of calcareous bioclastic sandstone, siltstone, and light olive-gray shale."
+    },
+    {
+      "MapUnit": "Mnu",
+      "Name": "Newman Limestone",
+      "FullName": "Newman Limestone, Upper member",
+      "Age": "Mississippian; Upper Mississippian",
+      "Thickness": "400+",
+      "Description": "Upper member (Mnu) is shale, medium-gray to medium dark-gray partly calcareous; interbedded with limestone, medium-gray to olive-gray, very fine- to medium-grained, partly argillaceous; minor calcareous sandstone. Upper member is very poorly exposed."
+    },
+    {
+      "MapUnit": "Mnl",
+      "Name": "Newman Limestone",
+      "FullName": "Newman Limestone, Lower member",
+      "Age": "Mississippian; Upper Mississippian",
+      "Thickness": "300+",
+      "Description": "Lower member (Mnl) is limestone, light olive-gray, (weathers light-gray), very fine- to medium-grained, partly pelletal; basal beds contain dolomite locally and chert nodules in most places. Often forms conspicuous bluffs."
+    },
+    {
+      "MapUnit": "Mg",
+      "Name": "Grainger Formation",
+      "FullName": "Grainger Formation",
+      "Age": "Mississippian; Lower Mississippian",
+      "Thickness": "300+",
+      "Description": "Shale, greenish-gray and grayish-red; a few beds of siltstone, dark greenish-gray and grayish-red; abundant siderite nodules in basal 30 feet; includes as much as 30 feet of Fort Payne Formation at top."
+    },
+    {
+      "MapUnit": "MDc",
+      "Name": "Chattanooga Shale",
+      "FullName": "Chattanooga Shale",
+      "Age": "Mississippian and Devonian; Lower Mississippian and Upper Devonian",
+      "Thickness": "175-225",
+      "Description": "Shale, grayish-black, (weathers gray), carbonaceous, pyritic."
+    },
+    {
+      "MapUnit": "Sr",
+      "Name": "Rockwood Formation",
+      "FullName": "Rockwood Formation",
+      "Age": "Silurian; Middle Silurian",
+      "Thickness": "490-600",
+      "Description": "Shale, mostly light olive-gray with some grayish-red and greenish-gray beds; a few thin beds of siltstone; very fine to fine-grained sandstone, and oolitic hematite. Sandstone, medium-gray to brownish-gray, very fine- to medium-grained, thin- to thick-bedded in lower part."
+    },
+    {
+      "MapUnit": "Os",
+      "Name": "Sequatchie Formation",
+      "FullName": "Sequatchie Formation",
+      "Age": "Ordovician; Upper Ordovician",
+      "Thickness": "275-300",
+      "Description": "Calcareous shale and siltstone, grayish-red and greenish-gray."
+    },
+    {
+      "MapUnit": "Or",
+      "Name": "Reedsville Shale",
+      "FullName": "Chickamauga Group, Reedsville Shale",
+      "Age": "Ordovician; Upper Ordovician",
+      "Thickness": "275-300",
+      "Description": "Shale, medium-gray, calcareous; interbedded medium-gray coquinoid limestone and a few beds of calcareous siltstone."
+    },
+    {
+      "MapUnit": "Ot",
+      "Name": "Trenton Limestone",
+      "FullName": "Chickamauga Group, Trenton Limestone",
+      "Age": "Ordovician; Middle Ordovician",
+      "Thickness": "550+",
+      "Description": "Limestone, medium-gray and brownish-gray, coarse- to medium-grained, medium-bedded, largely coquinoid."
+    },
+    {
+      "MapUnit": "Oe",
+      "Name": "Eggleston Limestone",
+      "FullName": "Chickamauga Group, Eggleston Limestone",
+      "Age": "Ordovician; Middle Ordovician",
+      "Thickness": "120",
+      "Description": "Limestone, light olive-gray and yellowish-gray, very fine-grained; argillaceous in lower and upper parts; olive-black chert nodules at center; upper part contains two persistent bentonite beds."
+    },
+    {
+      "MapUnit": "Ohc",
+      "Name": "Hardy Creek Limestone",
+      "FullName": "Chickamauga Group, Hardy Creek Limestone",
+      "Age": "Ordovician; Middle Ordovician",
+      "Thickness": "120",
+      "Description": "Limestone, light olive-gray, thin-bedded, very fine-grained; grayish-brown chert nodules in middle part, upper part argillaceous."
+    },
+    {
+      "MapUnit": "Obh",
+      "Name": "Ben Hur Limestone",
+      "FullName": "Chickamauga Group, Ben Hur Limestone",
+      "Age": "Ordovician; Middle Ordovician",
+      "Thickness": "90",
+      "Description": "Limestone, light olive-gray to yellowish-gray; very fine-grained, argillaceous to very silty."
+    },
+    {
+      "MapUnit": "Ow",
+      "Name": "Woodway Limestone",
+      "FullName": "Chickamauga Group, Woodway Limestone",
+      "Age": "Ordovician; Middle Ordovician",
+      "Thickness": "275",
+      "Description": "Limestone, light brownish-gray to brownish-gray, very fine grained, often wavy-bedded; abundant Stromatocerium rugosum in beds at base."
+    },
+    {
+      "MapUnit": "Ohb",
+      "Name": "Hurricane Bridge Limestone",
+      "FullName": "Chickamauga Group, Hurricane Bridge Limestone",
+      "Age": "Ordovician; Middle Ordovician",
+      "Thickness": "300",
+      "Description": "Limestone, light olive-gray to olive-gray, very fine-grained, with calcite \"birdseyes\", partly argillaceous; upper part fossiliferous; contains a few grayish-red, argillaceous limestone beds."
+    },
+    {
+      "MapUnit": "Opm",
+      "Name": "Martin Creek Limestone and Poteet Limestone",
+      "FullName": "Chickamauga Group, Martin Creek Limestone and Poteet Limestone",
+      "Age": "Ordovician; Middle Ordovician",
+      "Thickness": "200-225",
+      "Description": "Limestone, light olive-gray to brownish-gray, very fine- to medium-grained, argillaceous limestone, and abundant medium-gray to black chert nodules in some beds."
+    },
+    {
+      "MapUnit": "Od",
+      "Name": "Dot Formation",
+      "FullName": "Chickamauga Group, Dot Formation",
+      "Age": "Ordovician; Middle Ordovician",
+      "Thickness": "180",
+      "Description": "Limestone, light olive-gray, very fine-grained, interbedded with dolomite, light-gray to yellowish-gray, very finely- to finely-crystalline, argillaceous; chert and dolomite pebble conglomerate at base where it rests upon the post-Knox unconformity."
+    },
+    {
+      "MapUnit": "Oma",
+      "Name": "Mascot Dolomite",
+      "FullName": "Knox Group, Mascot Dolomite",
+      "Age": "Ordovician; Lower Ordovician",
+      "Thickness": "500-600",
+      "Description": "Dolomite, olive-gray to white, mostly fine-grained; limestone, light olive-gray, fine grained, occasionally sandy; and chert in beds and nodules."
+    },
+    {
+      "MapUnit": "Ok",
+      "Name": "Kingsport Formation",
+      "FullName": "Knox Group, Kingsport Formation",
+      "Age": "Ordovician; Lower Ordovician",
+      "Thickness": "450+",
+      "Description": "Limestone, light olive-gray, fine-grained; dolomite, mostly coarse-grained; and chert, often in beds and large masses."
+    },
+    {
+      "MapUnit": "Oc",
+      "Name": "Chepultepec Dolomite",
+      "FullName": "Knox Group, Chepultepec Dolomite",
+      "Age": "Ordovician; Lower Ordovician",
+      "Thickness": "450+",
+      "Description": "Dolomite, light-gray to light olive-gray, mostly finely-crystalline; white, oolitic chert nodules in a few beds; medium-grained sandstone in beds as much as 10 feet thick in lower part; abundant chert."
+    },
+    {
+      "MapUnit": "Ccr",
+      "Name": "Copper Ridge Dolomite",
+      "FullName": "Knox Group, Copper Ridge Dolomite",
+      "Age": "Cambrian; Upper Cambrian",
+      "Thickness": "750-1000",
+      "Description": "Dolomite, lower part is brownish-gray to olive-gray, fine- to medium-crystalline, with petroliferous odor, occasional beds with cryptozon chert; upper part is very light-gray to light olive-gray, fine- to medium-crystalline; contains oolitic chert nodules."
+    },
+    {
+      "MapUnit": "Cmn",
+      "Name": "Maynardville Limestone",
+      "FullName": "Conasauga Group, Maynardville Limestone",
+      "Age": "Cambrian; Upper Cambrian",
+      "Thickness": "Upper Member 100-150; Lower Member 200-250",
+      "Description": "Limestone, massive to bedded; medium olive-gray, weathering to bluish-gray. Upper part ribboned and bedded with dolomite. Middle part thick-bedded to massive, often showing large scale scalloped bedforms. Lower part bedded, with interbedded olive-gray shale."
+    },
+    {
+      "MapUnit": "Cn",
+      "Name": "Nolichucky Shale",
+      "FullName": "Conasauga Group, Nolichucky Shale",
+      "Age": "Cambrian; Upper Cambrian",
+      "Thickness": "500+",
+      "Description": "Shale, yellowish- to greenish-gray calcareous shale with thin interbeds of limestone and very fine sandstone (in subsurface only)."
+    },
+    {
+      "MapUnit": "Cr",
+      "Name": "Rome Formation",
+      "FullName": "Rome Formation",
+      "Age": "Cambrian; Lower Cambrian",
+      "Thickness": "1600+",
+      "Description": "Shale, siltstone, sandstone, and limestone; shales greenish-gray to grayish-red, and gray; interbedded with fine- to coarse-grained, partly glauconitic sandstone and thin beds of gray limestone."
+    }
+  ]
+}
