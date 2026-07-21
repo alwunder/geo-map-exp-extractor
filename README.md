@@ -162,11 +162,14 @@ The table columns come directly from the selected profile and remain in profile 
 
 Cell changes and row operations are tracked as review feedback. They do not modify the original `extracted.json` or `extracted.csv` files.
 
-### Saving, reopening, and promoting reviewed work
+### Saving, reopening, clearing, and promoting reviewed work
 
 - `Save project`: writes the current reviewed table to `corrected.json` and `corrected.csv`, saves `notes.md`, and writes review events and final review records to `feedback.jsonl`. This is a local operation with no API call.
+- `Clear project`: returns the workbench to a clean, demo-ready state by clearing the active image, profile, run, table, notes, review metadata, and preview. It resets extraction options to their application defaults but retains the session API key and output directory.
 - `Load project`: opens an existing run folder containing `manifest.json` and loads `corrected.json` when available, otherwise `extracted.json`. It also restores the source image, notes, and available row review metadata.
 - `Promote corrected`: copies previously saved corrected JSON and CSV files into `examples/gold/<profile_id>/` for future regression testing and profile improvement. Save the project before promoting it.
+
+If the current table, review metadata, or notes contain unsaved changes, the app offers `Yes` (save), `No` (do not save), and `Cancel` choices before clearing the project, loading another project, starting a replacement extraction, or exiting. Clearing is disabled while an extraction is running, and exiting during a running extraction requires separate confirmation.
 
 The status bar at the bottom reports the current operation, completion state, cache use, save state, and errors.
 

@@ -59,6 +59,7 @@ class ReviewWorkbench(tk.Tk):
 
         self.image_path = tk.StringVar()
         self.profile_path = tk.StringVar(value="")
+        self._active_profile_path = ""
         self.output_dir = tk.StringVar(value=self._display_path(self._repo_root() / "outputs"))
         self.api_key_override: str | None = None
         self.model = tk.StringVar(value=DEFAULT_MODEL)
@@ -111,6 +112,7 @@ class ReviewWorkbench(tk.Tk):
 
         self._build_widgets()
         self._refresh_profiles()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _default_profile_path(self) -> Path:
         profiles = self._profiles_dir()
@@ -372,6 +374,9 @@ class ReviewWorkbench(tk.Tk):
         self.run_button = ttk.Button(top, text="Run extraction", command=self._run_extraction)
         self.run_button.grid(row=5, column=6, sticky="we", padx=(4,0), ipadx=20)
 
+        ttk.Button(top, text="Clear project", command=self._clear_project).grid(
+            row=5, column=9, padx=2, ipadx=4
+        )
         ttk.Button(top, text="Load project", command=self._load_project).grid(
             row=5, column=10, padx=2, ipadx=4
         )
@@ -536,6 +541,7 @@ class ReviewWorkbench(tk.Tk):
         current = Path(self.profile_path.get()) if self.profile_path.get().strip() else None
         if current is not None and current.is_file():
             self._apply_profile_settings(load_profile(current))
+            self._active_profile_path = self.profile_path.get()
         else:
             self.profile_path.set("")
 
@@ -543,13 +549,20 @@ class ReviewWorkbench(tk.Tk):
         selected = self.profile_path.get().strip()
         if not selected:
             return
+        if not self._confirm_save_before("changing the extraction profile"):
+            self.profile_path.set(self._active_profile_path)
+            return
         profile_file = Path(selected)
         if not profile_file.is_file():
             messagebox.showerror("Invalid profile", f"Profile not found: {profile_file}", parent=self)
             self.profile_path.set("")
             return
         profile = load_profile(profile_file)
+        self._active_profile_path = self._display_path(profile_file)
         self._apply_profile_settings(profile)
+        self.result = None
+        self.feedback_records = []
+        self.has_unsaved_changes = False
         self.rows = []
         self.original_rows = []
         self.row_statuses = []
@@ -559,6 +572,8 @@ class ReviewWorkbench(tk.Tk):
         self._manual_column_resize = False
         self._configure_table(profile.fields, [])
         self._sync_row_metadata_controls()
+        self.notes.delete("1.0", tk.END)
+        self.notes.edit_modified(False)
 
     def _apply_profile_settings(self, profile: Any) -> None:
         self.model.set(profile.model)
@@ -580,9 +595,15 @@ class ReviewWorkbench(tk.Tk):
             filetypes=[("YAML", "*.yml *.yaml"), ("All files", "*.*")],
         )
         if path:
+            if not self._confirm_save_before("changing the extraction profile"):
+                return
             self.profile_path.set(self._display_path(path))
+            self._active_profile_path = self.profile_path.get()
             profile = load_profile(path)
             self._apply_profile_settings(profile)
+            self.result = None
+            self.feedback_records = []
+            self.has_unsaved_changes = False
             self.rows = []
             self.original_rows = []
             self.row_statuses = []
@@ -592,6 +613,8 @@ class ReviewWorkbench(tk.Tk):
             self._manual_column_resize = False
             self._configure_table(profile.fields, [])
             self._sync_row_metadata_controls()
+            self.notes.delete("1.0", tk.END)
+            self.notes.edit_modified(False)
 
     def _browse_output(self) -> None:
         path = filedialog.askdirectory()
@@ -631,6 +654,8 @@ class ReviewWorkbench(tk.Tk):
             if not proceed:
                 self.status.set("Folder run cancelled. Choose a single image file.")
                 return
+        if not self._confirm_save_before("starting a new extraction"):
+            return
         if not self.dry_run.get():
             proceed = messagebox.askyesno(
                 "Confirm API call",
@@ -1511,6 +1536,8 @@ class ReviewWorkbench(tk.Tk):
         selected = filedialog.askdirectory(initialdir=str(initial_dir))
         if not selected:
             return
+        if not self._confirm_save_before("loading another project"):
+            return
         run_dir = Path(selected)
         manifest_path = run_dir / "manifest.json"
         if not manifest_path.exists():
@@ -1646,6 +1673,7 @@ class ReviewWorkbench(tk.Tk):
             self.profile_path.set(
                 self._display_path(self._profiles_dir() / f"{profile_id}.yml")
             )
+            self._active_profile_path = self.profile_path.get()
 
         source_image_path = Path(str(manifest.get("source_image_path", "")))
         if source_image_path.exists():
@@ -1664,6 +1692,106 @@ class ReviewWorkbench(tk.Tk):
         self.notes.edit_modified(False)
         self.has_unsaved_changes = False
         self._set_status_message(f"Project loaded: {result.run_id}")
+
+    def _confirm_save_before(self, action: str) -> bool:
+        """Offer to save reviewed changes before a destructive project action."""
+
+        if self.result is None or not self.has_unsaved_changes:
+            return True
+        decision = messagebox.askyesnocancel(
+            "Unsaved project changes",
+            (
+                "The current project has unsaved table, review, or notes changes.\n\n"
+                f"Save them before {action}?"
+            ),
+            parent=self,
+        )
+        if decision is None:
+            return False
+        if decision:
+            try:
+                self._save_corrected()
+            except Exception as exc:  # noqa: BLE001 - keep project open after save failure.
+                messagebox.showerror("Save failed", str(exc), parent=self)
+                self._set_status_message(f"Save failed: {exc}")
+                return False
+            return not self.has_unsaved_changes
+        return True
+
+    def _reset_project_state(self) -> None:
+        """Return to a clean demo-ready state without clearing the API key."""
+
+        self.result = None
+        self.rows = []
+        self.original_rows = []
+        self.feedback_records = []
+        self.row_statuses = []
+        self.row_comments = []
+        self.selected_row_index = None
+        self.table_fields = []
+        self.column_widths_by_field = {}
+        self._manual_column_resize = False
+        self.has_unsaved_changes = False
+
+        self.image_path.set("")
+        self.profile_path.set("")
+        self._active_profile_path = ""
+        self.model.set(DEFAULT_MODEL)
+        self.reasoning_effort.set(DEFAULT_REASONING_EFFORT)
+        self.image_detail.set(DEFAULT_IMAGE_DETAIL)
+        self.max_output_tokens.set(DEFAULT_MAX_OUTPUT_TOKENS)
+        self.use_max_output_tokens_limit.set(True)
+        self.include_profile_notes.set(False)
+        self.dry_run.set(False)
+        self.force_rerun.set(False)
+        self.segmented_mode.set(False)
+
+        if self.source_image is not None:
+            self.source_image.close()
+        self.source_image = None
+        self.preview_photo = None
+        self.preview_source_path = None
+        self.zoom = 1.0
+        self.canvas.delete("all")
+        self.canvas.configure(scrollregion=(0, 0, 0, 0), cursor="")
+        self.canvas.xview_moveto(0.0)
+        self.canvas.yview_moveto(0.0)
+
+        self._configure_table([], [])
+        self.row_status_var.set(self.row_status_labels["needs_review"])
+        self.row_comment_var.set("")
+        self._sync_status_dropdown_color()
+        self.notes.delete("1.0", tk.END)
+        self.notes.edit_modified(False)
+        self._set_status_message("Project cleared. Choose an image and profile to begin.")
+
+    def _clear_project(self) -> None:
+        if self._run_thread is not None and self._run_thread.is_alive():
+            messagebox.showinfo(
+                "Extraction in progress",
+                "Wait for the current extraction to finish before clearing the project.",
+                parent=self,
+            )
+            return
+        if not self._confirm_save_before("clearing the project"):
+            return
+        self._reset_project_state()
+
+    def _on_close(self) -> None:
+        if self._run_thread is not None and self._run_thread.is_alive():
+            close_running = messagebox.askyesno(
+                "Extraction in progress",
+                (
+                    "An extraction is still running. Closing now may interrupt the request and "
+                    "leave the run incomplete.\n\nClose anyway?"
+                ),
+                parent=self,
+            )
+            if not close_running:
+                return
+        if not self._confirm_save_before("exiting"):
+            return
+        self.destroy()
 
     def _save_corrected(self) -> None:
         if self.result is None:

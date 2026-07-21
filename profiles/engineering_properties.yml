@@ -2,7 +2,7 @@ id: engineering_properties
 name: Engineering properties
 
 task_label: explanation of engineering properties
-model: gpt-5.5
+model: gpt-5.6-sol
 reasoning_effort: medium
 image_detail: high
 max_output_tokens: 12000
