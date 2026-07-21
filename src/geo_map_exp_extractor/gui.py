@@ -375,7 +375,7 @@ class ReviewWorkbench(tk.Tk):
         self.run_button.grid(row=5, column=6, sticky="we", padx=(4,0), ipadx=20)
 
         ttk.Button(top, text="Clear project", command=self._clear_project).grid(
-            row=5, column=9, padx=2, ipadx=4
+            row=5, column=9, sticky="e", padx=2, ipadx=4
         )
         ttk.Button(top, text="Load project", command=self._load_project).grid(
             row=5, column=10, padx=2, ipadx=4
