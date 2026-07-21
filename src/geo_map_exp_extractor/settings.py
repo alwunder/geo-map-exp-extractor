@@ -6,9 +6,9 @@ from pathlib import Path
 
 SCHEMA_VERSION = "1.0"
 
-DEFAULT_MODEL = "gpt-5.5"
+DEFAULT_MODEL = "gpt-5.6-sol"
 EXPERIMENTAL_MODEL = "chat-latest"
-SUPPORTED_MODELS = ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-5.5-pro", EXPERIMENTAL_MODEL)
+SUPPORTED_MODELS = ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-5.5-pro", "gpt-5.6-sol", EXPERIMENTAL_MODEL)
 
 DEFAULT_REASONING_EFFORT = "medium"
 SUPPORTED_REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh")

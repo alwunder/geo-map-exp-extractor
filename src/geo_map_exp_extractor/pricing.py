@@ -16,8 +16,13 @@ class ModelPricing:
 
 # Keep this map user-editable. Values here are examples and may change over time.
 # Update these entries to match the current OpenAI pricing for your account/model snapshot.
-# UPDATED 2026-05-06
+# UPDATED 2026-07-21
 MODEL_PRICING_USD_PER_1M: dict[str, ModelPricing] = {
+    "gpt-5.6-sol": ModelPricing(
+        input_per_million=5.00,
+        output_per_million=30.00,
+        cached_input_per_million=0.50,
+    ),
     "gpt-5.5": ModelPricing(
         input_per_million=5.00,
         output_per_million=30.00,
