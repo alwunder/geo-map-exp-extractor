@@ -2,14 +2,46 @@
 
 Template-driven visual table extraction from scanned geologic map explanation images.
 
-The project is built around deliberate, auditable OpenAI API usage. It is not a bulk OCR utility and does not auto-learn by rewriting prompts.
+`geo-map-exp-extractor` turns visually complex explanation panels into reviewable, structured tables for GIS, geology, and publication workflows. It is designed for material such as engineering-property tables, water-production descriptions, stratigraphic columns, formation explanations, footnotes, and other scanned cartographic text blocks where layout and visual relationships carry meaning.
+
+## Why use model vision for this workflow?
+
+Conventional OCR is useful for recognizing characters, but a geologic explanation panel is rarely just a page of continuous text. It may contain narrow columns, wrapped descriptions, formation symbols, headings that apply to several rows, irregular spacing, standalone notes, and text whose correct field depends on its visual position. A vision-capable model can consider the image and the extraction instructions together, which makes it better suited to interpreting these relationships and returning each piece of text in the requested field.
+
+This project does not use the model as an unchecked transcription shortcut. It surrounds the model call with a controlled workflow:
+
+- A reusable prompt defines the general extraction behavior.
+- A YAML profile defines the task, fields, field order, preservation rules, normalization choices, and special instructions for a particular table type.
+- Optional profile notes add reviewed, task-specific guidance without burying that guidance in Python code.
+- A dynamically generated JSON Schema requires a predictable response shape that can be validated before export.
+- The selected image, prompt, schema, profile, model settings, hashes, usage, and outputs are preserved in a run folder for review and auditing.
+- A correction workflow keeps the original extraction, reviewed output, comments, and feedback separate so changes remain traceable.
+
+The goal is therefore not merely to "read the text." It is to apply the same documented extraction specification to similar source images, preserve important geologic wording and symbols, and produce CSV and JSON data that can move into downstream GIS or publication work with less manual restructuring.
+
+## ChatGPT web interface versus this API workflow
+
+Uploading an image to the ChatGPT web interface can be useful for exploration, testing an idea, discussing an unusual panel, or performing a one-time extraction. It is conversational by design: the user supplies instructions in a chat, reviews the response, and may refine the request through follow-up messages. That flexibility is valuable, but it can be difficult to reproduce the exact prompt, settings, output field order, and review history across many images or users.
+
+This software uses the OpenAI API to make the extraction process programmatic and inspectable. For each run, it can submit the same prompt template, profile, schema, model settings, and image-processing rules; validate the returned structure; preserve artifacts; reuse an identical cached request; and export the result in a known field order. The GUI provides a convenient desktop interface to this API workflow, while the CLI makes the same workflow available for scripted or confirmed batch use.
+
+"Repeatable" describes the controlled process, not a promise that a generative model will always return byte-for-byte identical text. Model outputs can vary, scans can be ambiguous, and structured output still requires validation and human review. Profiles, notes, fixed settings, caching, and saved corrections reduce avoidable variation and make differences easier to identify, explain, and improve deliberately.
+
+The project is not a bulk OCR utility and does not auto-learn by silently rewriting prompts or profiles. Improvements remain intentional and reviewable.
 
 ## API key and billing
 
-- Set `OPENAI_API_KEY` in your shell environment or in a repo-local `.env` file.
-- Do not store keys in `.env.example`; that file is a template only.
-- API billing is separate from ChatGPT subscriptions.
-- The app never logs or writes your API key to run artifacts.
+An OpenAI API key is required for live image extraction because the application sends the prepared image, prompt, and schema to the OpenAI API. Dry runs and local review operations such as editing, saving, loading, and promoting existing results do not require an API call.
+
+### Getting an API key
+
+1. Sign in to an OpenAI account, or create one, at the [OpenAI API Keys page](https://platform.openai.com/api-keys). This page requires an account and login.
+2. Select **Create new secret key** and configure the key for the appropriate API project and permissions.
+3. Copy the new secret immediately and store it securely. OpenAI displays the full secret only when it is created; if it is lost, create a replacement key.
+4. Configure API billing or credits for the API account if required. API usage and billing are separate from ChatGPT subscriptions, so a paid ChatGPT plan does not by itself include API usage.
+5. Set the key as `OPENAI_API_KEY` in your shell environment or place it in a repo-local `.env` file as shown below. The GUI's `Set API key...` control can also set a temporary override for the current session.
+
+Treat an API key like a password: do not share it, paste it into issues or logs, or commit it to source control. Do not store a real key in `.env.example`; that file is a template only. The application never logs or writes the key to run artifacts.
 
 Example `.env`:
 
