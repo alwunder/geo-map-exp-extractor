@@ -1,8 +1,16 @@
 ﻿# geo-map-exp-extractor
 
-Template-driven visual table extraction from scanned geologic map explanation images.
+Template-driven visual table extraction from images of scanned geologic map explanations (specifically the Description of Map Units, or "DMU").
 
-`geo-map-exp-extractor` turns visually complex explanation panels into reviewable, structured tables for GIS, geology, and publication workflows. It is designed for material such as engineering-property tables, water-production descriptions, stratigraphic columns, formation explanations, footnotes, and other scanned cartographic text blocks where layout and visual relationships carry meaning.
+`geo-map-exp-extractor` turns visually complex explanation panels (DMUs) into reviewable, structured tables for GIS, geology, and publication workflows. It is designed for material such as engineering-property tables, water-production descriptions, stratigraphic columns, formation explanations, footnotes, and other scanned cartographic text blocks where layout and visual relationships carry meaning.
+
+## Context
+
+The National Geologic Map Database (NGMDB) is engaged in a long-term effort to compile the master DMU table, drawing content from all of Nation's geologic maps whether they are in GIS format (specifically the GeMS schema) or in paper or PDF format.  This master DMU table follows the GeMS schema for the "DescriptionOfMapUnits" table, and is integrated with all other components of the NGMDB's database (see components at https://ngmdb.usgs.gov/), and results from several years of prototyping.  Functionality for content search is forthcoming, after NGMDB staff judge there is sufficient content in this table to warrant deployment.
+
+The NGMDB is a Congressionally mandated national archive, managed by the U.S. Geological Survey and built in collaboration with the Nation's State geological surveys (represented by the Association of American State Geologists, or AASG).  Over three decades, the USGS and AASG have built the NGMDB into a truly authoritative system.
+
+As with all other components of the NGMDB, full population of this master DMU table would not possible without the close collaboration with State geological survey colleagues.  This git site provides a community-driven set of evolving technical specifications for populating the master DMU table with content derived from OCRing of scanned, paper geologic maps.  We hope you will engage with us in this process.  For general questions about this process, please contact the NGMDB chief, Dave Soller (drsoller@usgs.gov).  For questions about the code at this site, please contact Andrew Wunderlich (Andrew.Wunderlich@tn.gov).
 
 ## Why use model vision for this workflow?
 
