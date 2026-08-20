@@ -113,7 +113,23 @@ def test_run_extraction_job_writes_manifest(tmp_path: Path, monkeypatch) -> None
     manifest = json.loads((result.run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["run_id"] == "20260506T123000Z"
     assert manifest["timestamp"] == "2026-05-06T12:30:00+00:00"
-    assert manifest["source_image_path"] == image_path.as_posix()
+    assert manifest["source_image_path"] == "source_image.png"
+    assert manifest["processed_image_path"] == "processed_api_image.png"
+    assert manifest["output_paths"] == {
+        "source_image": "source_image.png",
+        "processed_image": "processed_api_image.png",
+        "profile": "profile.yml",
+        "prompt": "prompt.txt",
+        "schema": "schema.json",
+        "raw_response": "raw_response.json",
+        "extracted_csv": "extracted.csv",
+        "extracted_json": "extracted.json",
+        "corrected_csv": "corrected.csv",
+        "corrected_json": "corrected.json",
+        "manifest": "manifest.json",
+        "notes": "notes.md",
+        "feedback": "feedback.jsonl",
+    }
     assert manifest["original_image_dimensions"] == {"width": 1600, "height": 1200}
     assert manifest["profile_id"] == "water_production"
     assert manifest["profile_fields"] == result.fields

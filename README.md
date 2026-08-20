@@ -10,7 +10,7 @@ The National Geologic Map Database (NGMDB) is engaged in a long-term effort to c
 
 The NGMDB is a Congressionally mandated national archive, managed by the U.S. Geological Survey and built in collaboration with the Nation's State geological surveys (represented by the Association of American State Geologists, or AASG).  Over three decades, the USGS and AASG have built the NGMDB into a truly authoritative system.
 
-As with all other components of the NGMDB, full population of this master DMU table would not possible without the close collaboration with State geological survey colleagues.  This git site provides a community-driven set of evolving technical specifications for populating the master DMU table with content derived from OCRing of scanned, paper geologic maps.  We hope you will engage with us in this process.  For general questions about this process, please contact the NGMDB chief, Dave Soller (drsoller@usgs.gov).  For questions about the code at this site, please contact Andrew Wunderlich (Andrew.Wunderlich@tn.gov).
+As with all other components of the NGMDB, full population of this master DMU table would not possible without the close collaboration with State geological survey colleagues.  This git site provides a community-driven set of evolving technical specifications for populating the master DMU table with content derived from OCRing of scanned, paper geologic maps.  We hope you will engage with us in this process.  For general questions about this process, please contact the NGMDB chief, Dave Soller ([drsoller@usgs.gov](mailto:drsoller@usgs.gov)).  For questions about the code at this site, please contact Andrew Wunderlich ([andrew.wunderlich@tn.gov](mailto:andrew.wunderlich@tn.gov)).
 
 ## Why use model vision for this workflow?
 
