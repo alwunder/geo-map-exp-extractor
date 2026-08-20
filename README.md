@@ -4,6 +4,53 @@ Template-driven visual table extraction from images of scanned geologic map expl
 
 `geo-map-exp-extractor` turns visually complex explanation panels (DMUs) into reviewable, structured tables for GIS, geology, and publication workflows. It is designed for material such as engineering-property tables, water-production descriptions, stratigraphic columns, formation explanations, footnotes, and other scanned cartographic text blocks where layout and visual relationships carry meaning.
 
+## Windows — ready-to-run deployment
+
+For ordinary Windows use, download the **Windows deployment ZIP** from the
+[GitHub Releases page](https://github.com/alwunder/geo-map-exp-extractor/releases). Do not use
+GitHub's automatic **Source code (zip)** archive as the deployment package; it does not contain the
+ready-to-run deployment layer.
+
+The Windows deployment does not require administrator rights, PowerShell, Git, pip, a preinstalled
+Python or uv, or manual virtual-environment setup.
+
+1. Download the Windows deployment ZIP from Releases.
+2. Extract it to a folder you can write to, such as a folder under Documents or Downloads. Do not
+   run the application from inside the ZIP.
+3. Double-click **Run Geo Map Exp Extractor.bat**.
+4. Allow the first launch to prepare the private Python runtime and application environment for
+   your Windows account. Subsequent launches are much faster.
+5. In the application, use **Set API key...** to provide an OpenAI API key for the current session,
+   then use the application normally. The session key is application configuration, not part of
+   deployment setup, and the GUI can open without it.
+
+The deployment ZIP includes its verified bootstrap executable. First setup still requires
+permitted HTTPS access to download managed Python and the locked Python packages. It uses the
+Windows certificate store, including organizational trust roots configured on the computer. If
+network or security policy blocks a download, do not bypass that policy; collect the deployment
+logs and contact the appropriate support team.
+
+The extracted deployment also includes:
+
+- **Diagnose Geo Map Exp Extractor.bat**, which reports deployment, runtime, write-access, and
+  configuration-presence information without displaying an API key;
+- **Repair Geo Map Exp Extractor Environment.bat**, which rebuilds only this user's application
+  environment while preserving application source and project data.
+
+Deployment logs are stored under:
+
+```text
+%LOCALAPPDATA%\PythonDeploymentBuilder\apps\geo-map-exp-extractor\logs\
+```
+
+Deployment state is stored under the adjacent `state` directory. When reporting a deployment
+problem, include the relevant Diagnose output and recent deployment logs, but never send an API key
+or `.env` file.
+
+Completed extraction project/run folders are self-contained. They may be copied or moved to a new
+writable location and reopened with **Load Project**; the selected folder becomes the authoritative
+location for its image, extracted rows, notes/feedback, and other project-local files.
+
 ## Context
 
 The National Geologic Map Database (NGMDB) is engaged in a long-term effort to compile the master DMU table, drawing content from all of Nation's geologic maps whether they are in GIS format (specifically the GeMS schema) or in paper or PDF format.  This master DMU table follows the GeMS schema for the "DescriptionOfMapUnits" table, and is integrated with all other components of the NGMDB's database (see components at https://ngmdb.usgs.gov/), and results from several years of prototyping.  Functionality for content search is forthcoming, after NGMDB staff judge there is sufficient content in this table to warrant deployment.
