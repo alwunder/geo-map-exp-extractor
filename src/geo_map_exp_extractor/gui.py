@@ -9,7 +9,6 @@ import sys
 import threading
 import tkinter as tk
 from datetime import datetime
-import json
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any
@@ -30,9 +29,10 @@ from geo_map_exp_extractor.config import load_profile
 from geo_map_exp_extractor.env_utils import load_env_from_candidates
 from geo_map_exp_extractor.jobs import (
     ExtractionJobResult,
+    ProjectLoadError,
     build_feedback_record,
+    load_review_project,
     promote_corrected_to_gold,
-    review_output_paths,
     run_extraction_job,
     write_corrected_outputs,
     write_feedback_jsonl,
@@ -1538,80 +1538,19 @@ class ReviewWorkbench(tk.Tk):
             return
         if not self._confirm_save_before("loading another project"):
             return
-        run_dir = Path(selected)
-        manifest_path = run_dir / "manifest.json"
-        if not manifest_path.exists():
-            messagebox.showerror(
-                "Invalid project folder",
-                "Selected folder does not contain manifest.json.",
-                parent=self,
-            )
+        try:
+            loaded_project = load_review_project(selected)
+        except ProjectLoadError as exc:
+            messagebox.showerror("Could not load project", str(exc), parent=self)
             return
 
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest_outputs = manifest.get("output_paths", {})
-        output_paths = review_output_paths(run_dir)
-        if isinstance(manifest_outputs, dict):
-            for key, value in manifest_outputs.items():
-                if isinstance(value, str):
-                    output_paths[key] = Path(value)
-
-        extracted_json = output_paths.get("extracted_json", run_dir / "extracted.json")
-        corrected_json = output_paths.get("corrected_json", run_dir / "corrected.json")
-        data_path = corrected_json if corrected_json.exists() else extracted_json
-        if not data_path.exists():
-            messagebox.showerror(
-                "Invalid project folder",
-                "Could not find extracted.json or corrected.json in the selected folder.",
-                parent=self,
-            )
-            return
-
-        loaded_data = json.loads(data_path.read_text(encoding="utf-8"))
-        if not isinstance(loaded_data, dict):
-            messagebox.showerror("Invalid project data", "Project JSON is malformed.", parent=self)
-            return
-        fields = loaded_data.get("fields", [])
-        rows = loaded_data.get("rows", [])
-        if not isinstance(fields, list) or not isinstance(rows, list):
-            messagebox.showerror("Invalid project data", "Project fields/rows are malformed.", parent=self)
-            return
-
-        original_rows: list[dict[str, Any]] = []
-        if extracted_json.exists():
-            extracted_data = json.loads(extracted_json.read_text(encoding="utf-8"))
-            if isinstance(extracted_data, dict) and isinstance(extracted_data.get("rows"), list):
-                original_rows = [
-                    {field: row.get(field, "") for field in fields}
-                    for row in extracted_data.get("rows", [])
-                    if isinstance(row, dict)
-                ]
-        if not original_rows:
-            original_rows = [{field: row.get(field, "") for field in fields} for row in rows if isinstance(row, dict)]
-
-        normalized_rows = [
-            {field: row.get(field, "") for field in fields}
-            for row in rows
-            if isinstance(row, dict)
-        ]
-        if len(original_rows) < len(normalized_rows):
-            original_rows.extend(
-                [{field: "" for field in fields} for _ in range(len(normalized_rows) - len(original_rows))]
-            )
-        original_rows = original_rows[: len(normalized_rows)]
-
-        feedback_path = output_paths.get("feedback", run_dir / "feedback.jsonl")
-        loaded_feedback: list[dict[str, Any]] = []
-        if feedback_path.exists():
-            for line in feedback_path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    item = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(item, dict):
-                    loaded_feedback.append(item)
+        run_dir = loaded_project.run_dir
+        manifest = loaded_project.manifest
+        output_paths = loaded_project.output_paths
+        fields = loaded_project.fields
+        normalized_rows = loaded_project.rows
+        original_rows = loaded_project.original_rows
+        loaded_feedback = loaded_project.feedback_records
 
         statuses = ["needs_review"] * len(normalized_rows)
         comments = [""] * len(normalized_rows)
@@ -1675,20 +1614,16 @@ class ReviewWorkbench(tk.Tk):
             )
             self._active_profile_path = self.profile_path.get()
 
-        source_image_path = Path(str(manifest.get("source_image_path", "")))
-        if source_image_path.exists():
+        source_image_path = loaded_project.source_image_path
+        if source_image_path is not None:
             self.image_path.set(self._display_path(source_image_path))
             self._load_preview(source_image_path)
-        elif output_paths.get("source_image") and output_paths["source_image"].exists():
-            self.image_path.set(self._display_path(output_paths["source_image"]))
-            self._load_preview(output_paths["source_image"])
 
         self._configure_table(result.fields, self.rows)
         self._sync_row_metadata_controls()
-        notes_path = output_paths.get("notes", run_dir / "notes.md")
         self.notes.delete("1.0", tk.END)
-        if notes_path.exists():
-            self.notes.insert("1.0", notes_path.read_text(encoding="utf-8"))
+        if loaded_project.notes_text:
+            self.notes.insert("1.0", loaded_project.notes_text)
         self.notes.edit_modified(False)
         self.has_unsaved_changes = False
         self._set_status_message(f"Project loaded: {result.run_id}")

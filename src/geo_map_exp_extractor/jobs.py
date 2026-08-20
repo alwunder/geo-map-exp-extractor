@@ -8,7 +8,7 @@ import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from geo_map_exp_extractor import __version__
@@ -61,6 +61,26 @@ class ExtractionJobResult:
     warnings: list[str]
 
 
+@dataclass(frozen=True)
+class LoadedReviewProject:
+    """Validated project data resolved beneath the selected run folder."""
+
+    run_dir: Path
+    manifest: dict[str, Any]
+    output_paths: dict[str, Path]
+    fields: list[str]
+    rows: list[dict[str, Any]]
+    original_rows: list[dict[str, Any]]
+    feedback_records: list[dict[str, Any]]
+    notes_text: str
+    source_image_path: Path | None
+    processed_image_path: Path | None
+
+
+class ProjectLoadError(ValueError):
+    """Raised when a selected review project cannot be loaded safely."""
+
+
 def _default_prompt_template_path() -> Path:
     """Return the repo-local prompt template path used by the CLI."""
 
@@ -92,8 +112,14 @@ def _unique_run_dir(output_dir: Path, run_id: str) -> Path:
     return candidate
 
 
-def _portable_path(path: str | Path) -> str:
-    return Path(path).as_posix()
+def _portable_path(path: str | Path, *, relative_to: str | Path | None = None) -> str:
+    candidate = Path(path)
+    if relative_to is not None:
+        try:
+            candidate = candidate.resolve().relative_to(Path(relative_to).resolve())
+        except ValueError:
+            pass
+    return candidate.as_posix()
 
 
 def _sha256_text(value: str) -> str:
@@ -184,6 +210,278 @@ def review_output_paths(run_dir: str | Path) -> dict[str, Path]:
     }
 
 
+def _manifest_pure_path(value: str) -> PurePath:
+    """Interpret manifest paths from either Windows or POSIX systems."""
+
+    windows_path = PureWindowsPath(value)
+    if windows_path.is_absolute():
+        return windows_path
+    return PurePosixPath(value.replace("\\", "/"))
+
+
+def _safe_project_path(run_dir: Path, relative_path: PurePath, *, label: str) -> Path:
+    candidate = run_dir.joinpath(*relative_path.parts).resolve()
+    try:
+        candidate.relative_to(run_dir)
+    except ValueError as exc:
+        msg = f"Manifest path for {label!r} escapes the selected project folder: {relative_path}"
+        raise ProjectLoadError(msg) from exc
+    return candidate
+
+
+def _legacy_manifest_root(manifest_outputs: dict[str, Any]) -> PurePath | None:
+    value = manifest_outputs.get("manifest")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    path = _manifest_pure_path(value)
+    return path.parent if path.is_absolute() else None
+
+
+def _resolve_manifest_output_paths(
+    run_dir: Path,
+    manifest_outputs: dict[str, Any],
+) -> dict[str, Path]:
+    """Resolve output paths locally without ever following legacy external paths."""
+
+    defaults = review_output_paths(run_dir)
+    resolved = dict(defaults)
+    legacy_root = _legacy_manifest_root(manifest_outputs)
+
+    for key, default_path in defaults.items():
+        if key == "manifest":
+            value = manifest_outputs.get(key)
+            if value is not None:
+                if not isinstance(value, str) or not value.strip():
+                    msg = "manifest.json output_paths.manifest must be a non-empty path string."
+                    raise ProjectLoadError(msg)
+                manifest_path = _manifest_pure_path(value)
+                if not manifest_path.is_absolute():
+                    _safe_project_path(
+                        run_dir,
+                        manifest_path,
+                        label="output_paths.manifest",
+                    )
+            resolved[key] = default_path.resolve()
+            continue
+        value = manifest_outputs.get(key)
+        if value is None:
+            resolved[key] = default_path.resolve()
+            continue
+        if not isinstance(value, str) or not value.strip():
+            msg = f"manifest.json output_paths.{key} must be a non-empty path string."
+            raise ProjectLoadError(msg)
+
+        manifest_path = _manifest_pure_path(value)
+        if not manifest_path.is_absolute():
+            resolved[key] = _safe_project_path(run_dir, manifest_path, label=f"output_paths.{key}")
+            continue
+
+        local_candidates: list[Path] = []
+        if legacy_root is not None and type(manifest_path) is type(legacy_root):
+            try:
+                legacy_relative = manifest_path.relative_to(legacy_root)
+            except ValueError:
+                pass
+            else:
+                local_candidates.append(
+                    _safe_project_path(run_dir, legacy_relative, label=f"output_paths.{key}")
+                )
+        local_candidates.append(
+            _safe_project_path(
+                run_dir,
+                PurePosixPath(manifest_path.name),
+                label=f"output_paths.{key}",
+            )
+        )
+        local_candidates.append(default_path.resolve())
+        resolved[key] = next((path for path in local_candidates if path.exists()), local_candidates[0])
+
+    return resolved
+
+
+def _resolve_manifest_image_path(
+    *,
+    run_dir: Path,
+    manifest: dict[str, Any],
+    output_paths: dict[str, Path],
+    output_key: str,
+    manifest_key: str,
+    filename_stem: str,
+    legacy_root: PurePath | None,
+) -> Path | None:
+    """Prefer a run-local image copy and safely rebase legacy image paths."""
+
+    recorded_value = manifest.get(manifest_key)
+    recorded_candidate: Path | None = None
+    if recorded_value is not None:
+        if not isinstance(recorded_value, str) or not recorded_value.strip():
+            msg = f"manifest.json field {manifest_key!r} must be a non-empty path string."
+            raise ProjectLoadError(msg)
+        recorded_path = _manifest_pure_path(recorded_value)
+        if not recorded_path.is_absolute():
+            recorded_candidate = _safe_project_path(run_dir, recorded_path, label=manifest_key)
+        else:
+            candidates: list[Path] = []
+            if legacy_root is not None and type(recorded_path) is type(legacy_root):
+                try:
+                    relative_path = recorded_path.relative_to(legacy_root)
+                except ValueError:
+                    pass
+                else:
+                    candidates.append(_safe_project_path(run_dir, relative_path, label=manifest_key))
+            candidates.append(
+                _safe_project_path(
+                    run_dir,
+                    PurePosixPath(recorded_path.name),
+                    label=manifest_key,
+                )
+            )
+            recorded_candidate = next((path for path in candidates if path.exists()), candidates[0])
+
+    candidates = [output_paths[output_key]]
+    candidates.extend(sorted(run_dir.glob(f"{filename_stem}.*")))
+    if recorded_candidate is not None:
+        candidates.append(recorded_candidate)
+    for candidate in candidates:
+        safe_candidate = _safe_project_path(
+            run_dir,
+            PurePosixPath(candidate.relative_to(run_dir).as_posix()),
+            label=manifest_key,
+        )
+        if safe_candidate.is_file():
+            output_paths[output_key] = safe_candidate
+            return safe_candidate
+    return None
+
+
+def _read_project_json(path: Path, *, description: str) -> dict[str, Any]:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        msg = f"{description} contains malformed JSON: {exc.msg} (line {exc.lineno})."
+        raise ProjectLoadError(msg) from exc
+    except OSError as exc:
+        msg = f"Could not read {description} at {path}: {exc}"
+        raise ProjectLoadError(msg) from exc
+    if not isinstance(loaded, dict):
+        raise ProjectLoadError(f"{description} must contain a JSON object.")
+    return loaded
+
+
+def load_review_project(run_dir: str | Path) -> LoadedReviewProject:
+    """Load a review project with the selected run folder as its authority boundary."""
+
+    selected_dir = Path(run_dir).resolve()
+    if not selected_dir.is_dir():
+        raise ProjectLoadError(f"Selected project folder does not exist: {selected_dir}")
+
+    manifest_path = selected_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise ProjectLoadError("Selected project folder does not contain manifest.json.")
+    manifest = _read_project_json(manifest_path, description="manifest.json")
+
+    manifest_outputs = manifest.get("output_paths", {})
+    if not isinstance(manifest_outputs, dict):
+        raise ProjectLoadError("manifest.json field 'output_paths' must be a JSON object.")
+    output_paths = _resolve_manifest_output_paths(selected_dir, manifest_outputs)
+    legacy_root = _legacy_manifest_root(manifest_outputs)
+
+    source_image_path = _resolve_manifest_image_path(
+        run_dir=selected_dir,
+        manifest=manifest,
+        output_paths=output_paths,
+        output_key="source_image",
+        manifest_key="source_image_path",
+        filename_stem="source_image",
+        legacy_root=legacy_root,
+    )
+    processed_image_path = _resolve_manifest_image_path(
+        run_dir=selected_dir,
+        manifest=manifest,
+        output_paths=output_paths,
+        output_key="processed_image",
+        manifest_key="processed_image_path",
+        filename_stem="processed_api_image",
+        legacy_root=legacy_root,
+    )
+
+    corrected_json = output_paths["corrected_json"]
+    extracted_json = output_paths["extracted_json"]
+    data_path = corrected_json if corrected_json.is_file() else extracted_json
+    if not data_path.is_file():
+        raise ProjectLoadError(
+            "Selected project folder does not contain required corrected.json or extracted.json data."
+        )
+    loaded_data = _read_project_json(data_path, description=data_path.name)
+    fields_value = loaded_data.get("fields")
+    rows_value = loaded_data.get("rows")
+    if not isinstance(fields_value, list) or not all(
+        isinstance(field, str) for field in fields_value
+    ):
+        raise ProjectLoadError(f"{data_path.name} field 'fields' must be a list of strings.")
+    if not isinstance(rows_value, list) or not all(isinstance(row, dict) for row in rows_value):
+        raise ProjectLoadError(f"{data_path.name} field 'rows' must be a list of objects.")
+
+    fields = list(fields_value)
+    rows = [{field: row.get(field, "") for field in fields} for row in rows_value]
+    original_rows: list[dict[str, Any]] = []
+    if extracted_json.is_file():
+        extracted_data = _read_project_json(extracted_json, description=extracted_json.name)
+        extracted_rows = extracted_data.get("rows")
+        if not isinstance(extracted_rows, list) or not all(
+            isinstance(row, dict) for row in extracted_rows
+        ):
+            raise ProjectLoadError("extracted.json field 'rows' must be a list of objects.")
+        original_rows = [
+            {field: row.get(field, "") for field in fields} for row in extracted_rows
+        ]
+    if not original_rows:
+        original_rows = [dict(row) for row in rows]
+    if len(original_rows) < len(rows):
+        original_rows.extend(
+            [{field: "" for field in fields} for _ in range(len(rows) - len(original_rows))]
+        )
+    original_rows = original_rows[: len(rows)]
+
+    feedback_records: list[dict[str, Any]] = []
+    feedback_path = output_paths["feedback"]
+    if feedback_path.is_file():
+        try:
+            feedback_lines = feedback_path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise ProjectLoadError(f"Could not read feedback file {feedback_path}: {exc}") from exc
+        for line in feedback_lines:
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                feedback_records.append(item)
+
+    notes_text = ""
+    notes_path = output_paths["notes"]
+    if notes_path.is_file():
+        try:
+            notes_text = notes_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ProjectLoadError(f"Could not read notes file {notes_path}: {exc}") from exc
+
+    return LoadedReviewProject(
+        run_dir=selected_dir,
+        manifest=manifest,
+        output_paths=output_paths,
+        fields=fields,
+        rows=rows,
+        original_rows=original_rows,
+        feedback_records=feedback_records,
+        notes_text=notes_text,
+        source_image_path=source_image_path,
+        processed_image_path=processed_image_path,
+    )
+
+
 def _copy_inputs(image_path: Path, profile_path: Path, paths: dict[str, Path]) -> dict[str, Path]:
     """Copy source inputs into the run folder and return their concrete paths."""
 
@@ -253,16 +551,19 @@ def build_review_manifest(
 ) -> dict[str, Any]:
     """Build manifest metadata for one extraction run."""
 
+    run_dir = output_paths["manifest"].parent
     return {
         "run_id": run_id,
         "timestamp": timestamp,
-        "source_image_path": _portable_path(prepared_image.source_path),
+        "source_image_path": _portable_path(output_paths["source_image"], relative_to=run_dir),
         "source_image_hash": prepared_image.source_hash,
         "original_image_dimensions": {
             "width": prepared_image.source_width,
             "height": prepared_image.source_height,
         },
-        "processed_image_path": _portable_path(prepared_image.processed_path),
+        "processed_image_path": _portable_path(
+            output_paths["processed_image"], relative_to=run_dir
+        ),
         "processed_image_hash": prepared_image.processed_hash,
         "processed_image_dimensions": {
             "width": prepared_image.processed_width,
@@ -295,7 +596,9 @@ def build_review_manifest(
             "was_converted": prepared_image.was_converted,
             "was_resized": prepared_image.was_resized,
         },
-        "output_paths": {key: _portable_path(path) for key, path in output_paths.items()},
+        "output_paths": {
+            key: _portable_path(path, relative_to=run_dir) for key, path in output_paths.items()
+        },
         "package_version": __version__,
     }
 
@@ -594,7 +897,7 @@ def run_extraction_job(
             segment_calls.append(
                 {
                     "segment_index": index,
-                    "segment_path": _portable_path(segment_path),
+                    "segment_path": _portable_path(segment_path, relative_to=run_dir),
                     "request_fingerprint": segment_request_hash,
                     "api_call_mode": "cache_reuse" if cached_payload is not None else "fresh_api_call",
                     "usage": segment_usage,
