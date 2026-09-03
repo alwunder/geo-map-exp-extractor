@@ -36,19 +36,19 @@ This workflow was designed to address these common challenges when parsing a DMU
 
 *Diagram of geo-map-exp-extractor workflow*
 
-Extraction workflow:
+### Extraction workflow via the GUI
 1. *Input DMU panel* - The user selects an image of a scanned geologic map explanation or DMU panel together with an extraction profile. The profile defines the type of information being extracted, the output fields and their order, text-preservation rules, and any task-specific instructions. This allows the same application to be used for different kinds of geologic explanation tables without hard coding each format into the program. 
 2. *Image preparation* - The application prepares the source image for submission to the model, including format conversion or resizing when required. The goal is to preserve as much readable map text and layout information as possible while creating an image suitable for API processing. For unusually tall or dense panels, an optional segmented mode can divide the source into overlapping sections so that small text remains readable. 
 3. *OpenAI Vision API* - The prepared image is sent to a vision-capable OpenAI model together with a reusable extraction prompt, the selected profile, optional reviewed profile notes, and a dynamically generated JSON Schema. Model, reasoning, image-detail, and other request settings are controlled by the application so that the extraction process can be documented and reproduced. A dry-run option allows the complete request to be prepared and inspected without making an API call. 
 4. *Information extraction* - The vision model interprets both the text and visual organization of the source image. Depending on the selected profile, this may include identifying map-unit symbols, unit names, ages, lithologies, descriptions, thicknesses, headings, notes, or other geologic information. This is especially important for DMU panels because the meaning of text often depends on its position, grouping, indentation, or relationship to neighboring entries rather than on the words alone. 
 5. *Structuring and validation* - Model output is constrained to the field structure defined by the profile and JSON Schema. The application validates the returned structure and maintains the specified field order before creating downstream files. The request configuration, processed image, hashes, prompt, schema, profile, model settings, usage information, and other metadata are also preserved with the run, making an extraction inspectable and auditable rather than an isolated AI response. 
-6. *Tabular output* - Successful extractions are written to structured JSON and CSV files that can be reviewed and then incorporated into GIS databases, geologic data-management systems, spreadsheets, or publication workflows. The resulting table converts information that previously existed only as visually arranged map graphics into machine-readable records while retaining the wording and organization required by the extraction profile. 
-7. *Review and refinement* - Human review remains an explicit part of the workflow. The GUI allows reviewers to edit extracted cells, add or remove rows, change row order, assign review statuses, and record comments or run-level notes. Reviewed results are saved separately from the original model output so that corrections remain traceable. Corrected examples can also be promoted as reference data for regression testing and deliberate improvement of profiles and extraction instructions. The application does not silently retrain itself or rewrite its prompts based on corrections; improvements remain intentional and reviewable. This is a key point: Step 7 is a human feedback loop; the reviewer learns from the result and can improve the profile, notes, or extraction instructions and this process was designed to deliberately preserve that human oversight.
+6. *Tabular output* - Successful extractions convert the information that previously existed only as visually arranged map graphics into machine-readable records while retaining the wording and organization required by the extraction profile. The resulting tables are written to structured JSON and CSV files that can be reviewed via the built-in spreadsheet-like editor in the GUI. Corrected data can then be incorporated into GIS databases, geologic data-management systems, spreadsheets, or publication workflows. 
+7. *Review and refinement* - Human review remains an explicit part of the workflow. The GUI allows reviewers to edit extracted cells, add or remove rows, change row order, assign review statuses, and record comments or run-level notes. Reviewed results are saved separately from the original model output so that corrections remain traceable. Corrected examples can also be promoted as reference data for regression testing and deliberate improvement of profiles and extraction instructions. This is a key point: the application does not silently re-train itself or modify user prompts based on corrections made to the output; improvements must remain intentional and reviewable. Step 7 is a human feedback loop: the reviewer learns from the result and can improve the profile, notes, or extraction instructions. This application and workflow are designed to deliberately preserve critical human oversight.
 
 
-## ChatGPT web interface versus this API workflow
+## Using a web interface versus this API workflow
 
-Uploading an image to the ChatGPT web interface can be useful for exploration, testing an idea, discussing an unusual panel, or performing a one-time extraction. It is conversational by design: the user supplies instructions in a chat, reviews the response, and may refine the request through follow-up messages. That flexibility is valuable, but it can be difficult to reproduce the exact prompt, settings, output field order, and review history across many images or users.
+Uploading an image to the ChatGPT web interface can be useful for exploration, testing an idea, discussing an unusual panel, or performing a one-time extraction. It is conversational by design: the user supplies instructions in a chat, reviews the response, and may refine the request through follow-up messages. That flexibility is valuable, but it can be difficult to reproduce the exact prompt, settings, output format/schema, and review history across many images or users.
 
 This software uses the OpenAI API to make the extraction process programmatic and inspectable. For each run, it can submit the same prompt template, profile, schema, model settings, and image-processing rules; validate the returned structure; preserve artifacts; reuse an identical cached request; and export the result in a known field order. The GUI provides a convenient desktop interface to this API workflow, while the CLI makes the same workflow available for scripted or confirmed batch use.
 
@@ -68,7 +68,7 @@ This software was designed using the OpenAI API, thus a key is required for live
 4. Configure API billing or credits for the API account if required. API usage and billing are separate from ChatGPT subscriptions, so a paid ChatGPT plan does not by itself include API usage.
 5. Set the key as `OPENAI_API_KEY` in your shell environment or place it in a repo-local `.env` file as shown below. The GUI's `Set API key...` control can also set a temporary override for the current session.
 
-Treat an API key like a password: do not share it, paste it into issues or logs, or commit it to source control. Do not store a real key in `.env.example`; that file is a template only. The application never logs or writes the key to run artifacts.
+IMPORTANT: Treat an API key like a password: do not share it, paste it into issues or logs, or commit it to source control. Do not store a real key in `.env.example`; that file is a template only. The application never logs or writes the key when processing images.
 
 Example `.env`:
 
@@ -123,7 +123,7 @@ Completed extraction project/run folders are self-contained. They may be copied 
 writable location and reopened with **Load Project**; the selected folder becomes the authoritative
 location for its image, extracted rows, notes/feedback, and other project-local files.
 
-## Installation
+## Dev installation
 
 Use Python 3.11+.
 
@@ -316,7 +316,7 @@ Model pricing is manually configurable in:
 
 - `src/geo_map_exp_extractor/pricing.py`
 
-Post-run cost estimation is based on actual usage fields returned by the API (`input_tokens`, `output_tokens`, `cached_tokens` when present). Pre-run image token numbers are rough estimates only.
+Post-run cost estimation is based on actual usage fields returned by the API (`input_tokens`, `output_tokens`, `cached_tokens` when present). Pre-run image token numbers are rough estimates only. See [Pricing | OpenAI API](https://developers.openai.com/api/docs/pricing) for the latest OpenAI API pricing.
 
 ## Review/correction workflow
 
