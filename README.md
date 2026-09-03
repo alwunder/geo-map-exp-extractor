@@ -27,6 +27,28 @@ This project does not use the model as an unchecked transcription shortcut. It s
 
 The goal is therefore not merely to "read the text." It is to apply the same documented extraction specification to similar source images, preserve important geologic wording and symbols, and produce CSV and JSON data that can move into downstream GIS or publication work with less manual restructuring.
 
+## Conceptual overview
+![Diagram of geo-map-exp-extractor workflow](screenshots/Vision-basedExtractionOfDMUsFigure.png)
+
+This application uses a controlled, repeatable workflow to convert visually complex Description of Map Units (DMU) panels and similar geologic map explanation graphics into structured, reviewable data. Rather than treating the source as ordinary OCR text, the workflow preserves the visual relationships between unit symbols, headings, descriptions, and other elements and combines those relationships with a defined extraction specification.
+This workflow was designed to address these common challenges when parsing a DMU: variable formatting between different maps and publishers (and vintages); long, wrapped, or irregularly positioned descriptions; hierarchical relationships between groups, formations, members, and other map units; small or degraded text in historical scans; and layouts in which the meaning of text depends on its spatial relationship to other elements.
+Extraction workflow:
+1. Input DMU panel
+The user selects an image of a scanned geologic map explanation or DMU panel together with an extraction profile. The profile defines the type of information being extracted, the output fields and their order, text-preservation rules, and any task-specific instructions. This allows the same application to be used for different kinds of geologic explanation tables without hard coding each format into the program. 
+2. Image preparation
+The application prepares the source image for submission to the model, including format conversion or resizing when required. The goal is to preserve as much readable map text and layout information as possible while creating an image suitable for API processing. For unusually tall or dense panels, an optional segmented mode can divide the source into overlapping sections so that small text remains readable. 
+3. OpenAI Vision API
+The prepared image is sent to a vision-capable OpenAI model together with a reusable extraction prompt, the selected profile, optional reviewed profile notes, and a dynamically generated JSON Schema. Model, reasoning, image-detail, and other request settings are controlled by the application so that the extraction process can be documented and reproduced. A dry-run option allows the complete request to be prepared and inspected without making an API call. 
+4. Information extraction
+The vision model interprets both the text and visual organization of the source image. Depending on the selected profile, this may include identifying map-unit symbols, unit names, ages, lithologies, descriptions, thicknesses, headings, notes, or other geologic information. This is especially important for DMU panels because the meaning of text often depends on its position, grouping, indentation, or relationship to neighboring entries rather than on the words alone. 
+5. Structuring and validation
+Model output is constrained to the field structure defined by the profile and JSON Schema. The application validates the returned structure and maintains the specified field order before creating downstream files. The request configuration, processed image, hashes, prompt, schema, profile, model settings, usage information, and other metadata are also preserved with the run, making an extraction inspectable and auditable rather than an isolated AI response. 
+6. Tabular output
+Successful extractions are written to structured JSON and CSV files that can be reviewed and then incorporated into GIS databases, geologic data-management systems, spreadsheets, or publication workflows. The resulting table converts information that previously existed only as visually arranged map graphics into machine-readable records while retaining the wording and organization required by the extraction profile. 
+7. Review and refinement
+Human review remains an explicit part of the workflow. The GUI allows reviewers to edit extracted cells, add or remove rows, change row order, assign review statuses, and record comments or run-level notes. Reviewed results are saved separately from the original model output so that corrections remain traceable. Corrected examples can also be promoted as reference data for regression testing and deliberate improvement of profiles and extraction instructions. The application does not silently retrain itself or rewrite its prompts based on corrections; improvements remain intentional and reviewable. This is a key point: Step 7 is a human feedback loop; the reviewer learns from the result and can improve the profile, notes, or extraction instructions and this process was designed to deliberately preserve that human oversight.
+
+
 ## ChatGPT web interface versus this API workflow
 
 Uploading an image to the ChatGPT web interface can be useful for exploration, testing an idea, discussing an unusual panel, or performing a one-time extraction. It is conversational by design: the user supplies instructions in a chat, reviews the response, and may refine the request through follow-up messages. That flexibility is valuable, but it can be difficult to reproduce the exact prompt, settings, output field order, and review history across many images or users.
