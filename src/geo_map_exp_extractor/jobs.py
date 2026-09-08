@@ -34,6 +34,7 @@ from geo_map_exp_extractor.settings import (
     DEFAULT_MAX_IMAGE_SIDE_PX,
     DEFAULT_MODEL,
     DEFAULT_REASONING_EFFORT,
+    DEFAULT_SERVICE_TIER,
     REQUEST_CACHE_DIR,
     SCHEMA_VERSION,
 )
@@ -138,6 +139,7 @@ def _request_fingerprint(
     prompt_hash: str,
     model: str,
     reasoning_effort: str,
+    service_tier: str,
     image_detail: str,
     max_output_tokens: int | None,
     schema_version: str,
@@ -151,6 +153,7 @@ def _request_fingerprint(
         "prompt_hash": prompt_hash,
         "model": model,
         "reasoning_effort": reasoning_effort,
+        "service_tier": service_tier,
         "image_detail": image_detail,
         "max_output_tokens": max_output_tokens,
         "schema_version": schema_version,
@@ -535,6 +538,7 @@ def build_review_manifest(
     schema_hash: str,
     model: str,
     reasoning_effort: str,
+    service_tier: str,
     image_detail: str,
     max_output_tokens: int | None,
     schema_version: str,
@@ -577,6 +581,7 @@ def build_review_manifest(
         "request_fingerprint": request_hash,
         "model": model,
         "reasoning_effort": reasoning_effort,
+        "service_tier": service_tier,
         "image_detail": image_detail,
         "max_output_tokens": max_output_tokens,
         "api_call_mode": api_call_mode,
@@ -694,6 +699,7 @@ def run_extraction_job(
     api_key: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
+    service_tier: str | None = None,
     image_detail: str | None = None,
     max_output_tokens: int | None = None,
     use_max_output_tokens_limit: bool = True,
@@ -736,6 +742,7 @@ def run_extraction_job(
     selected_reasoning_effort = (
         reasoning_effort if reasoning_effort is not None else profile.reasoning_effort
     )
+    selected_service_tier = service_tier if service_tier is not None else DEFAULT_SERVICE_TIER
     selected_image_detail = image_detail if image_detail is not None else profile.image_detail
     selected_max_output_tokens = None
     if use_max_output_tokens_limit:
@@ -746,6 +753,8 @@ def run_extraction_job(
         selected_model = DEFAULT_MODEL
     if not selected_reasoning_effort:
         selected_reasoning_effort = DEFAULT_REASONING_EFFORT
+    if not selected_service_tier:
+        selected_service_tier = DEFAULT_SERVICE_TIER
     if not selected_image_detail:
         selected_image_detail = DEFAULT_IMAGE_DETAIL
     if use_max_output_tokens_limit and selected_max_output_tokens is None:
@@ -786,6 +795,7 @@ def run_extraction_job(
         prompt_hash=prompt_hash,
         model=selected_model,
         reasoning_effort=selected_reasoning_effort,
+        service_tier=selected_service_tier,
         image_detail=selected_image_detail,
         max_output_tokens=selected_max_output_tokens,
         schema_version=(
@@ -841,6 +851,7 @@ def run_extraction_job(
                 prompt_hash=prompt_hash,
                 model=selected_model,
                 reasoning_effort=selected_reasoning_effort,
+                service_tier=selected_service_tier,
                 image_detail=selected_image_detail,
                 max_output_tokens=selected_max_output_tokens,
                 schema_version=(
@@ -876,6 +887,7 @@ def run_extraction_job(
                         model=selected_model,
                         api_key=api_key,
                         reasoning_effort=selected_reasoning_effort,
+                        service_tier=selected_service_tier,
                         image_detail=selected_image_detail,
                         max_output_tokens=selected_max_output_tokens,
                         schema=text_format,
@@ -958,6 +970,7 @@ def run_extraction_job(
         input_tokens=usage.get("input_tokens"),
         output_tokens=usage.get("output_tokens"),
         cached_tokens=usage.get("cached_tokens"),
+        service_tier=selected_service_tier,
     )
     manifest = build_review_manifest(
         run_id=run_dir.name,
@@ -969,6 +982,7 @@ def run_extraction_job(
         schema_hash=schema_hash,
         model=selected_model,
         reasoning_effort=selected_reasoning_effort,
+        service_tier=selected_service_tier,
         image_detail=selected_image_detail,
         max_output_tokens=selected_max_output_tokens,
         schema_version=SCHEMA_VERSION,

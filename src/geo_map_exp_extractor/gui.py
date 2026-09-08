@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -26,7 +27,7 @@ if __package__ is None or __package__ == "":
         sys.path.insert(0, str(src_root))
 
 from geo_map_exp_extractor.config import load_profile
-from geo_map_exp_extractor.env_utils import load_env_from_candidates
+from geo_map_exp_extractor.env_utils import default_env_candidates, load_env_from_candidates
 from geo_map_exp_extractor.jobs import (
     ExtractionJobResult,
     ProjectLoadError,
@@ -37,15 +38,19 @@ from geo_map_exp_extractor.jobs import (
     write_corrected_outputs,
     write_feedback_jsonl,
 )
+from geo_map_exp_extractor.markdown_help import configure_markdown_tags, render_markdown
 from geo_map_exp_extractor.settings import (
     DEFAULT_IMAGE_DETAIL,
     DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_REASONING_EFFORT,
+    DEFAULT_SERVICE_TIER,
     SUPPORTED_IMAGE_DETAILS,
     SUPPORTED_MODELS,
     SUPPORTED_REASONING_EFFORTS,
+    SUPPORTED_SERVICE_TIERS,
 )
+from geo_map_exp_extractor.pricing import get_model_options
 
 
 class ReviewWorkbench(tk.Tk):
@@ -54,7 +59,7 @@ class ReviewWorkbench(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Geologic Map Explanation Extraction Review Workbench")
-        self.geometry("1440x810")
+        self.geometry("1580x800")
         self._load_environment()
 
         self.image_path = tk.StringVar()
@@ -64,6 +69,7 @@ class ReviewWorkbench(tk.Tk):
         self.api_key_override: str | None = None
         self.model = tk.StringVar(value=DEFAULT_MODEL)
         self.reasoning_effort = tk.StringVar(value=DEFAULT_REASONING_EFFORT)
+        self.service_tier = tk.StringVar(value=DEFAULT_SERVICE_TIER)
         self.image_detail = tk.StringVar(value=DEFAULT_IMAGE_DETAIL)
         self.max_output_tokens = tk.IntVar(value=DEFAULT_MAX_OUTPUT_TOKENS)
         self.use_max_output_tokens_limit = tk.BooleanVar(value=True)
@@ -87,6 +93,8 @@ class ReviewWorkbench(tk.Tk):
         }
         self.row_status_var = tk.StringVar(value=self.row_status_labels["needs_review"])
         self.row_comment_var = tk.StringVar(value="")
+        self.auto_apply_row_metadata = tk.BooleanVar(value=False)
+        self._row_metadata_target_indexes: list[int] = []
         self.selected_row_index: int | None = None
         self.table_fields: list[str] = []
         self._use_tksheet = Sheet is not None
@@ -111,6 +119,8 @@ class ReviewWorkbench(tk.Tk):
         self._progress_started_at: datetime | None = None
 
         self._build_widgets()
+        self.model.trace_add("write", self._sync_model_options)
+        self._sync_model_options()
         self._refresh_profiles()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -136,7 +146,7 @@ class ReviewWorkbench(tk.Tk):
     def _load_environment(self) -> None:
         """Load .env values so OPENAI_API_KEY works in GUI launches."""
 
-        load_env_from_candidates([Path.cwd() / ".env", self._repo_root() / ".env"])
+        load_env_from_candidates(default_env_candidates())
 
     def _is_valid_api_key_value(self, value: str | None) -> bool:
         """Basic sanity check for API-key-like values."""
@@ -331,28 +341,39 @@ class ReviewWorkbench(tk.Tk):
         )
 
         ttk.Label(top, text="Model:").grid(row=3, column=0, sticky="w", padx=(0, 4), pady=2)
-        ttk.Combobox(
+        self.model_combo = ttk.Combobox(
             top,
             textvariable=self.model,
             values=SUPPORTED_MODELS,
             state="readonly",
-        ).grid(row=3, column=1, columnspan=2, sticky="we", padx=2, pady=2)
+        )
+        self.model_combo.grid(row=3, column=1, columnspan=2, sticky="we", padx=2, pady=2)
         ttk.Label(top, text="Reasoning effort:").grid(row=4, column=0, sticky="w", padx=(0, 4), pady=2)
-        ttk.Combobox(
+        self.reasoning_effort_combo = ttk.Combobox(
             top,
             textvariable=self.reasoning_effort,
             values=SUPPORTED_REASONING_EFFORTS,
             width=8,
             state="readonly",
-        ).grid(row=4, column=1, sticky="w", padx=2, pady=2)
-        ttk.Label(top, text="Image detail:").grid(row=5, column=0, sticky="w", padx=(0, 4), pady=2)
+        )
+        self.reasoning_effort_combo.grid(row=4, column=1, sticky="w", padx=2, pady=2)
+        ttk.Label(top, text="Service tier:").grid(row=5, column=0, sticky="w", padx=(0, 4), pady=2)
+        self.service_tier_combo = ttk.Combobox(
+            top,
+            textvariable=self.service_tier,
+            values=SUPPORTED_SERVICE_TIERS,
+            width=8,
+            state="readonly",
+        )
+        self.service_tier_combo.grid(row=5, column=1, sticky="w", padx=2, pady=2)
+        ttk.Label(top, text="Image detail:").grid(row=6, column=0, sticky="w", padx=(0, 4), pady=2)
         ttk.Combobox(
             top,
             textvariable=self.image_detail,
             values=SUPPORTED_IMAGE_DETAILS,
             width=8,
             state="readonly",
-        ).grid(row=5, column=1, sticky="w", padx=2, pady=2)
+        ).grid(row=6, column=1, sticky="w", padx=2, pady=2)
 
         ttk.Label(top, text="API call options:").grid(row=3, column=3, sticky="e", padx=(20, 0), pady=2)
         ttk.Checkbutton(top, text="Dry run (no API call)", variable=self.dry_run).grid(
@@ -427,6 +448,9 @@ class ReviewWorkbench(tk.Tk):
         table_controls = ttk.Frame(right)
         table_controls.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         ttk.Button(table_controls, text="Add row", command=self._add_row).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(table_controls, text="Duplicate row", command=self._duplicate_selected_row).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
         ttk.Button(table_controls, text="Delete row", command=self._delete_selected_row).pack(
             side=tk.LEFT, padx=(4, 0)
         )
@@ -459,6 +483,12 @@ class ReviewWorkbench(tk.Tk):
         self.row_comment_entry = ttk.Entry(table_controls, textvariable=self.row_comment_var, width=26)
         self.row_comment_entry.pack(side=tk.LEFT)
         self.row_comment_entry.bind("<Return>", self._apply_selected_row_metadata)
+        self.row_comment_entry.bind("<FocusOut>", self._auto_apply_row_metadata_on_focus_out)
+        ttk.Checkbutton(
+            table_controls,
+            text="Auto-apply",
+            variable=self.auto_apply_row_metadata,
+        ).pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(table_controls, text="Apply", command=self._apply_selected_row_metadata).pack(
             side=tk.LEFT, padx=(4, 0)
         )
@@ -578,8 +608,24 @@ class ReviewWorkbench(tk.Tk):
     def _apply_profile_settings(self, profile: Any) -> None:
         self.model.set(profile.model)
         self.reasoning_effort.set(profile.reasoning_effort)
+        self.service_tier.set(profile.service_tier)
+        self._sync_model_options()
         self.image_detail.set(profile.image_detail)
         self.max_output_tokens.set(profile.max_output_tokens)
+
+    def _sync_model_options(self, *_: str) -> None:
+        """Keep model-specific reasoning and service-tier selectors compatible."""
+
+        model = self.model.get().strip().lower()
+        options = get_model_options(model)
+        efforts = options.reasoning_efforts if options is not None else SUPPORTED_REASONING_EFFORTS
+        tiers = options.service_tiers if options is not None else SUPPORTED_SERVICE_TIERS
+        self.reasoning_effort_combo.configure(values=efforts)
+        self.service_tier_combo.configure(values=tiers)
+        if self.reasoning_effort.get() not in efforts:
+            self.reasoning_effort.set(DEFAULT_REASONING_EFFORT)
+        if self.service_tier.get() not in tiers:
+            self.service_tier.set(DEFAULT_SERVICE_TIER)
 
     def _browse_image(self) -> None:
         path = filedialog.askopenfilename(
@@ -692,6 +738,7 @@ class ReviewWorkbench(tk.Tk):
             "api_key": self.api_key_override,
             "model": self.model.get(),
             "reasoning_effort": self.reasoning_effort.get(),
+            "service_tier": self.service_tier.get(),
             "image_detail": self.image_detail.get(),
             "max_output_tokens": max_output_tokens,
             "use_max_output_tokens_limit": self.use_max_output_tokens_limit.get(),
@@ -1147,6 +1194,33 @@ class ReviewWorkbench(tk.Tk):
                 return row_value
         return None
 
+    def _selected_row_indexes(self) -> list[int]:
+        selected_indexes: list[int] = []
+        if self._use_tksheet and self.sheet is not None:
+            try:
+                selection = self.sheet.get_selected_rows(return_tuple=True)
+            except Exception:
+                selection = ()
+        elif self.table is not None:
+            try:
+                selection = self.table.selection()
+            except tk.TclError:
+                selection = ()
+        else:
+            selection = ()
+
+        for row_id in selection:
+            try:
+                row_index = int(row_id)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= row_index < len(self.rows):
+                selected_indexes.append(row_index)
+
+        if self.selected_row_index is not None and 0 <= self.selected_row_index < len(self.rows):
+            selected_indexes.append(self.selected_row_index)
+        return sorted(set(selected_indexes))
+
     def _select_sheet_row_preserve_column(self, row_index: int) -> None:
         if self.sheet is None:
             return
@@ -1163,6 +1237,11 @@ class ReviewWorkbench(tk.Tk):
         self.sheet.set_currently_selected(row_index, column)
 
     def _set_selected_row(self, row_index: int | None, *, sync_widget: bool = True) -> None:
+        previous_row_index = self.selected_row_index
+        if row_index != previous_row_index and not self._resolve_pending_row_metadata_change():
+            if previous_row_index is not None:
+                self._set_selected_row(previous_row_index, sync_widget=True)
+            return
         self.selected_row_index = row_index
         if row_index is None:
             self._sync_row_metadata_controls()
@@ -1183,13 +1262,85 @@ class ReviewWorkbench(tk.Tk):
         self._ensure_row_metadata_length()
         row_index = self.selected_row_index
         if row_index is None or row_index < 0 or row_index >= len(self.rows):
+            self._row_metadata_target_indexes = []
             self.row_status_var.set(self.row_status_labels["needs_review"])
             self.row_comment_var.set("")
             self._sync_status_dropdown_color()
             return
+        self._row_metadata_target_indexes = self._selected_row_indexes()
         self.row_status_var.set(self._status_label_from_code(self.row_statuses[row_index]))
         self.row_comment_var.set(self.row_comments[row_index])
         self._sync_status_dropdown_color()
+
+    def _pending_row_metadata_target_indexes(self) -> list[int]:
+        row_index = self.selected_row_index
+        if row_index is None or row_index < 0 or row_index >= len(self.rows):
+            return []
+        new_status = self._status_code_from_label(self.row_status_var.get())
+        new_comment = self.row_comment_var.get().strip()
+        if self.row_statuses[row_index] == new_status and self.row_comments[row_index] == new_comment:
+            return []
+        targets = [
+            index
+            for index in self._row_metadata_target_indexes
+            if 0 <= index < len(self.rows)
+        ]
+        return targets or [row_index]
+
+    def _apply_row_metadata_to_indexes(self, row_indexes: list[int]) -> bool:
+        if not row_indexes:
+            return False
+        new_status = self._status_code_from_label(self.row_status_var.get())
+        new_comment = self.row_comment_var.get().strip()
+        changed = False
+        for row_index in sorted(set(row_indexes)):
+            previous_status = self.row_statuses[row_index]
+            previous_comment = self.row_comments[row_index]
+            self.row_statuses[row_index] = new_status
+            self.row_comments[row_index] = new_comment
+            if previous_status == new_status and previous_comment == new_comment:
+                continue
+            self._record_feedback(
+                row_index=row_index,
+                field="__row__",
+                model_value=previous_status,
+                corrected_value=new_status,
+                status=new_status,
+                comment=new_comment,
+                event_type="row_metadata",
+            )
+            changed = True
+        if changed:
+            self._mark_unsaved()
+        if self._use_tksheet:
+            self._apply_sheet_status_highlights()
+        else:
+            self._refresh_table_display()
+        self._sync_status_dropdown_color()
+        return changed
+
+    def _resolve_pending_row_metadata_change(self) -> bool:
+        pending_indexes = self._pending_row_metadata_target_indexes()
+        if not pending_indexes:
+            return True
+        if self.auto_apply_row_metadata.get():
+            self._apply_row_metadata_to_indexes(pending_indexes)
+            return True
+        decision = messagebox.askyesnocancel(
+            "Apply row changes?",
+            "The current row has unapplied status or comment changes. Apply them before switching rows?",
+            parent=self,
+        )
+        if decision is None:
+            return False
+        if decision:
+            self._apply_row_metadata_to_indexes(pending_indexes)
+        return True
+
+    def _auto_apply_row_metadata_on_focus_out(self, _: tk.Event[Any]) -> None:
+        if not self.auto_apply_row_metadata.get():
+            return
+        self._apply_row_metadata_to_indexes(self._pending_row_metadata_target_indexes())
 
     def _active_profile_id(self) -> str:
         if self.result is None:
@@ -1237,7 +1388,7 @@ class ReviewWorkbench(tk.Tk):
         if not selection:
             self._set_selected_row(None)
             return
-        self._set_selected_row(int(selection[0]))
+        self._set_selected_row(int(selection[0]), sync_widget=False)
 
     def _on_sheet_end_edit_cell(self, event: Any) -> None:
         if self.result is None or self.sheet is None:
@@ -1405,6 +1556,8 @@ class ReviewWorkbench(tk.Tk):
         if self.result is None:
             messagebox.showinfo("No run", "Run extraction before editing rows.", parent=self)
             return
+        if not self._resolve_pending_row_metadata_change():
+            return
         insert_at = len(self.rows)
         if self.selected_row_index is not None:
             insert_at = self.selected_row_index + 1
@@ -1426,9 +1579,41 @@ class ReviewWorkbench(tk.Tk):
         )
         self._mark_unsaved()
 
+    def _duplicate_selected_row(self) -> None:
+        if self.result is None:
+            messagebox.showinfo("No run", "Run extraction before editing rows.", parent=self)
+            return
+        if not self._resolve_pending_row_metadata_change():
+            return
+        row_index = self.selected_row_index
+        if row_index is None or row_index < 0 or row_index >= len(self.rows):
+            messagebox.showinfo("No row selected", "Select a row to duplicate.", parent=self)
+            return
+
+        insert_at = row_index + 1
+        duplicated_row = dict(self.rows[row_index])
+        self.rows.insert(insert_at, duplicated_row)
+        self.original_rows.insert(insert_at, dict(duplicated_row))
+        self.row_statuses.insert(insert_at, "needs_review")
+        self.row_comments.insert(insert_at, "")
+        self._configure_table(self.result.fields, self.rows)
+        self._set_selected_row(insert_at)
+        self._record_feedback(
+            row_index=insert_at,
+            field="__row__",
+            model_value=self.rows[row_index],
+            corrected_value=duplicated_row,
+            status="needs_review",
+            comment="Row duplicated by reviewer",
+            event_type="row_duplicated",
+        )
+        self._mark_unsaved()
+
     def _delete_selected_row(self) -> None:
         if self.result is None:
             messagebox.showinfo("No run", "Run extraction before editing rows.", parent=self)
+            return
+        if not self._resolve_pending_row_metadata_change():
             return
         row_index = self.selected_row_index
         if row_index is None or row_index < 0 or row_index >= len(self.rows):
@@ -1455,6 +1640,8 @@ class ReviewWorkbench(tk.Tk):
     def _move_selected_row(self, step: int) -> None:
         if self.result is None:
             messagebox.showinfo("No run", "Run extraction before editing rows.", parent=self)
+            return
+        if not self._resolve_pending_row_metadata_change():
             return
         row_index = self.selected_row_index
         if row_index is None or row_index < 0 or row_index >= len(self.rows):
@@ -1490,45 +1677,97 @@ class ReviewWorkbench(tk.Tk):
         self._mark_unsaved()
 
     def _apply_selected_row_metadata(self, _: tk.Event[Any] | None = None) -> None:
-        row_index = self.selected_row_index
-        if row_index is None or row_index < 0 or row_index >= len(self.rows):
-            return
-        new_status = self._status_code_from_label(self.row_status_var.get())
-        new_comment = self.row_comment_var.get().strip()
-        previous_status = self.row_statuses[row_index]
-        previous_comment = self.row_comments[row_index]
-        self.row_statuses[row_index] = new_status
-        self.row_comments[row_index] = new_comment
-        if previous_status != new_status or previous_comment != new_comment:
-            self._record_feedback(
-                row_index=row_index,
-                field="__row__",
-                model_value=previous_status,
-                corrected_value=new_status,
-                status=new_status,
-                comment=new_comment,
-                event_type="row_metadata",
-            )
-            self._mark_unsaved()
-        if self._use_tksheet:
-            self._apply_sheet_status_highlights()
-        else:
-            self._refresh_table_display()
-        self._sync_status_dropdown_color()
+        selected_indexes = self._selected_row_indexes()
+        self._apply_row_metadata_to_indexes(selected_indexes)
 
     def _show_help(self) -> None:
+        """Open the README as a formatted, illustrated in-app user guide."""
+
         help_path = self._repo_root() / "README.md"
         if not help_path.exists():
             messagebox.showerror("Help unavailable", f"Could not find {help_path}.", parent=self)
             return
+        try:
+            markdown_text = help_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            messagebox.showerror(
+                "Help unavailable",
+                f"Could not read the user guide:\n{help_path}\n\n{exc}",
+                parent=self,
+            )
+            return
+
         help_window = tk.Toplevel(self)
-        help_window.title("Help and Workflow")
-        help_window.geometry("900x700")
+        help_window.title("Geo Map Exp Extractor Help")
+        help_window.geometry("1100x780")
+        help_window.minsize(760, 520)
         help_window.transient(self)
-        body = scrolledtext.ScrolledText(help_window, wrap=tk.WORD)
-        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        body.insert("1.0", help_path.read_text(encoding="utf-8"))
+
+        frame = ttk.Frame(help_window, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        header = ttk.Frame(frame)
+        header.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(
+            header,
+            text="Geo Map Explanation Extractor — Help and Workflow",
+            font=("Segoe UI", 13, "bold"),
+        ).pack(side=tk.LEFT)
+        ttk.Button(header, text="Close", command=help_window.destroy).pack(side=tk.RIGHT)
+
+        body = scrolledtext.ScrolledText(
+            frame,
+            wrap=tk.WORD,
+            padx=14,
+            pady=10,
+            borderwidth=1,
+            relief=tk.SOLID,
+            cursor="arrow",
+        )
+        body.pack(fill=tk.BOTH, expand=True)
+        configure_markdown_tags(body)
+
+        def open_help_link(target: str) -> None:
+            """Follow README links without needing an embedded web browser."""
+
+            if target.startswith("#"):
+                heading = target[1:].replace("-", " ")
+                location = body.search(heading, "1.0", stopindex="end", nocase=True)
+                if location:
+                    body.see(location)
+                    body.mark_set(tk.INSERT, location)
+                return
+            if target.lower().startswith(("https://", "http://", "mailto:")):
+                webbrowser.open(target)
+                return
+
+            local_target = Path(target.split("#", 1)[0])
+            if not local_target.is_absolute():
+                local_target = help_path.parent / local_target
+            if not local_target.is_file():
+                messagebox.showerror(
+                    "Link unavailable",
+                    f"Could not find the linked file:\n{local_target}",
+                    parent=help_window,
+                )
+                return
+            try:
+                if sys.platform == "win32":
+                    os.startfile(str(local_target))
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", str(local_target)])
+                else:
+                    subprocess.Popen(["xdg-open", str(local_target)])
+            except OSError as exc:
+                messagebox.showerror(
+                    "Could not open link",
+                    f"Could not open {local_target}.\n\n{exc}",
+                    parent=help_window,
+                )
+
+        render_markdown(body, markdown_text, help_path.parent, open_help_link)
         body.configure(state="disabled")
+        body.yview_moveto(0.0)
+        help_window.bind("<Escape>", lambda _event: help_window.destroy())
         self._center_window(help_window)
 
     def _load_project(self) -> None:
@@ -1631,6 +1870,8 @@ class ReviewWorkbench(tk.Tk):
     def _confirm_save_before(self, action: str) -> bool:
         """Offer to save reviewed changes before a destructive project action."""
 
+        if not self._resolve_pending_row_metadata_change():
+            return False
         if self.result is None or not self.has_unsaved_changes:
             return True
         decision = messagebox.askyesnocancel(
@@ -1645,10 +1886,12 @@ class ReviewWorkbench(tk.Tk):
             return False
         if decision:
             try:
-                self._save_corrected()
+                saved = self._save_corrected()
             except Exception as exc:  # noqa: BLE001 - keep project open after save failure.
                 messagebox.showerror("Save failed", str(exc), parent=self)
                 self._set_status_message(f"Save failed: {exc}")
+                return False
+            if saved is False:
                 return False
             return not self.has_unsaved_changes
         return True
@@ -1673,6 +1916,7 @@ class ReviewWorkbench(tk.Tk):
         self._active_profile_path = ""
         self.model.set(DEFAULT_MODEL)
         self.reasoning_effort.set(DEFAULT_REASONING_EFFORT)
+        self.service_tier.set(DEFAULT_SERVICE_TIER)
         self.image_detail.set(DEFAULT_IMAGE_DETAIL)
         self.max_output_tokens.set(DEFAULT_MAX_OUTPUT_TOKENS)
         self.use_max_output_tokens_limit.set(True)
@@ -1728,10 +1972,12 @@ class ReviewWorkbench(tk.Tk):
             return
         self.destroy()
 
-    def _save_corrected(self) -> None:
+    def _save_corrected(self) -> bool:
         if self.result is None:
             messagebox.showinfo("No run", "Run extraction before saving corrections.", parent=self)
-            return
+            return False
+        if not self._resolve_pending_row_metadata_change():
+            return False
         if self._use_tksheet and self.sheet is not None:
             try:
                 self.sheet.close_text_editor()
@@ -1799,6 +2045,7 @@ class ReviewWorkbench(tk.Tk):
         write_feedback_jsonl(records, self.result.output_paths["feedback"])
         self._mark_saved()
         self._set_status_message(f"Saved project in {self.result.run_dir}")
+        return True
 
     def _promote_corrected(self) -> None:
         if self.result is None:

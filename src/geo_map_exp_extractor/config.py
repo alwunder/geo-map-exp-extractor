@@ -12,8 +12,10 @@ from geo_map_exp_extractor.settings import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_REASONING_EFFORT,
+    DEFAULT_SERVICE_TIER,
     SUPPORTED_IMAGE_DETAILS,
     SUPPORTED_REASONING_EFFORTS,
+    SUPPORTED_SERVICE_TIERS,
 )
 
 
@@ -33,6 +35,7 @@ class ExtractionProfile(BaseModel):
     special_instructions: list[str] = Field(default_factory=list)
     model: str = DEFAULT_MODEL
     reasoning_effort: str = DEFAULT_REASONING_EFFORT
+    service_tier: str = DEFAULT_SERVICE_TIER
     image_detail: str = DEFAULT_IMAGE_DETAIL
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
 
@@ -85,6 +88,16 @@ class ExtractionProfile(BaseModel):
         if normalized not in SUPPORTED_REASONING_EFFORTS:
             supported = ", ".join(SUPPORTED_REASONING_EFFORTS)
             msg = f"unsupported reasoning_effort {value!r}; expected one of: {supported}"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("service_tier")
+    @classmethod
+    def validate_service_tier(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in SUPPORTED_SERVICE_TIERS:
+            supported = ", ".join(SUPPORTED_SERVICE_TIERS)
+            msg = f"unsupported service_tier {value!r}; expected one of: {supported}"
             raise ValueError(msg)
         return normalized
 

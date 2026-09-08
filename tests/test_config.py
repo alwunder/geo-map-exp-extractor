@@ -9,6 +9,7 @@ from geo_map_exp_extractor.settings import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_REASONING_EFFORT,
+    DEFAULT_SERVICE_TIER,
 )
 
 
@@ -26,6 +27,7 @@ def test_load_profile_preserves_field_order() -> None:
     assert profile.include_intro_footnotes is True
     assert profile.model == DEFAULT_MODEL
     assert profile.reasoning_effort == DEFAULT_REASONING_EFFORT
+    assert profile.service_tier == DEFAULT_SERVICE_TIER
     assert profile.image_detail == DEFAULT_IMAGE_DETAIL
     assert profile.max_output_tokens == DEFAULT_MAX_OUTPUT_TOKENS
 
@@ -60,6 +62,7 @@ def test_profile_defaults_are_applied_when_model_config_is_missing() -> None:
 
     assert profile.model == DEFAULT_MODEL
     assert profile.reasoning_effort == DEFAULT_REASONING_EFFORT
+    assert profile.service_tier == DEFAULT_SERVICE_TIER
     assert profile.image_detail == DEFAULT_IMAGE_DETAIL
     assert profile.max_output_tokens == DEFAULT_MAX_OUTPUT_TOKENS
 
