@@ -177,7 +177,7 @@ For the Windows release, use the per-user settings file:
 
 If you are a first-time user and want to store your API key in an `.env` file for the application to consume, open File Explorer, paste `%LOCALAPPDATA%` into the address bar, navigate to the folder `GeoMapExpExtractor` (create it if it does not exist), and create a new text file named `.env` inside it. Be sure Windows has not silently named it `.env.txt`.
 
-For developers running this source checkout, copy [`.env.example`](src/geo_map_exp_extractor/.env.example) to `.env` in that same `src\geo_map_exp_extractor` folder, then edit the copy. The app also recognizes a `.env` in the folder from which it is launched for temporary or project-specific use.
+For developers running this source checkout, copy `.env.example` to `.env` in that same `src\geo_map_exp_extractor` folder, then edit the copy. The app also recognizes a `.env` in the folder from which it is launched for temporary or project-specific use.
 
 IMPORTANT: Treat an API key like a password: do not share it, paste it into issues or logs, or commit it to source control. *Do not store a real key in `.env.example`; that file is a template only.* The application never logs or writes the key when processing images.
 
