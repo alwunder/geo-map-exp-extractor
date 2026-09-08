@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from PIL import Image, ImageTk
 try:
@@ -1707,11 +1708,21 @@ class ReviewWorkbench(tk.Tk):
         frame.pack(fill=tk.BOTH, expand=True)
         header = ttk.Frame(frame)
         header.pack(fill=tk.X, pady=(0, 8))
+        history: list[Path] = []
+        history_index = -1
+        current_path: Path | None = None
+
+        back_button = ttk.Button(header, text="Back", state="disabled")
+        back_button.pack(side=tk.LEFT)
+        forward_button = ttk.Button(header, text="Forward", state="disabled")
+        forward_button.pack(side=tk.LEFT, padx=(6, 12))
+        title_var = tk.StringVar(value=help_path.name)
         ttk.Label(
             header,
             text="Geo Map Explanation Extractor — Help and Workflow",
             font=("Segoe UI", 13, "bold"),
         ).pack(side=tk.LEFT)
+        ttk.Label(header, textvariable=title_var).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Button(header, text="Close", command=help_window.destroy).pack(side=tk.RIGHT)
 
         body = scrolledtext.ScrolledText(
@@ -1726,29 +1737,114 @@ class ReviewWorkbench(tk.Tk):
         body.pack(fill=tk.BOTH, expand=True)
         configure_markdown_tags(body)
 
+        def update_navigation() -> None:
+            back_button.configure(state="normal" if history_index > 0 else "disabled")
+            forward_button.configure(
+                state="normal" if history_index + 1 < len(history) else "disabled"
+            )
+
+        def scroll_to_fragment(fragment: str) -> None:
+            heading = unquote(fragment).replace("-", " ").strip()
+            if not heading:
+                body.yview_moveto(0.0)
+                return
+            location = body.search(heading, "1.0", stopindex="end", nocase=True)
+            if location:
+                body.see(location)
+                body.mark_set(tk.INSERT, location)
+
+        def display_help_document(
+            document_text: str,
+            document_path: Path,
+            *,
+            record_history: bool,
+        ) -> None:
+            nonlocal history_index, current_path
+            document_path = document_path.resolve()
+            if record_history:
+                del history[history_index + 1 :]
+                history.append(document_path)
+                history_index = len(history) - 1
+            current_path = document_path
+            title_var.set(document_path.name)
+            body.configure(state="normal")
+            for tag_name in body.tag_names():
+                if tag_name.startswith("markdown_link_"):
+                    body.tag_delete(tag_name)
+            body.delete("1.0", tk.END)
+            body._markdown_image_references = []  # type: ignore[attr-defined]
+            body._markdown_link_serial = 0  # type: ignore[attr-defined]
+            render_markdown(body, document_text, document_path.parent, open_help_link)
+            body.configure(state="disabled")
+            body.yview_moveto(0.0)
+            update_navigation()
+
+        def load_help_document(document_path: Path, *, record_history: bool) -> bool:
+            try:
+                document_text = document_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                messagebox.showerror(
+                    "Help unavailable",
+                    f"Could not read the linked help document:\n{document_path}\n\n{exc}",
+                    parent=help_window,
+                )
+                return False
+            display_help_document(document_text, document_path, record_history=record_history)
+            return True
+
+        def navigate_history(offset: int) -> None:
+            nonlocal history_index
+            target_index = history_index + offset
+            if not 0 <= target_index < len(history):
+                return
+            previous_index = history_index
+            history_index = target_index
+            if not load_help_document(history[target_index], record_history=False):
+                history_index = previous_index
+                update_navigation()
+
         def open_help_link(target: str) -> None:
-            """Follow README links without needing an embedded web browser."""
+            """Open web links or navigate between local Markdown documents."""
 
-            if target.startswith("#"):
-                heading = target[1:].replace("-", " ")
-                location = body.search(heading, "1.0", stopindex="end", nocase=True)
-                if location:
-                    body.see(location)
-                    body.mark_set(tk.INSERT, location)
-                return
-            if target.lower().startswith(("https://", "http://", "mailto:")):
-                webbrowser.open(target)
+            parsed = urlsplit(target)
+            if parsed.scheme and not Path(target).is_absolute():
+                try:
+                    if not webbrowser.open(target, new=2):
+                        raise RuntimeError("No application accepted the link.")
+                except Exception as exc:  # noqa: BLE001 - show a useful GUI error.
+                    messagebox.showerror(
+                        "Could not open link",
+                        f"Could not open {target}.\n\n{exc}",
+                        parent=help_window,
+                    )
                 return
 
-            local_target = Path(target.split("#", 1)[0])
+            relative_path = unquote(parsed.path)
+            if not relative_path:
+                scroll_to_fragment(parsed.fragment)
+                return
+            if current_path is None:
+                messagebox.showerror(
+                    "Link unavailable",
+                    f"Could not resolve local link: {target}",
+                    parent=help_window,
+                )
+                return
+
+            local_target = Path(relative_path)
             if not local_target.is_absolute():
-                local_target = help_path.parent / local_target
+                local_target = current_path.parent / local_target
+            local_target = local_target.resolve()
             if not local_target.is_file():
                 messagebox.showerror(
                     "Link unavailable",
                     f"Could not find the linked file:\n{local_target}",
                     parent=help_window,
                 )
+                return
+            if local_target.suffix.lower() == ".md":
+                if load_help_document(local_target, record_history=True):
+                    scroll_to_fragment(parsed.fragment)
                 return
             try:
                 if sys.platform == "win32":
@@ -1764,9 +1860,9 @@ class ReviewWorkbench(tk.Tk):
                     parent=help_window,
                 )
 
-        render_markdown(body, markdown_text, help_path.parent, open_help_link)
-        body.configure(state="disabled")
-        body.yview_moveto(0.0)
+        back_button.configure(command=lambda: navigate_history(-1))
+        forward_button.configure(command=lambda: navigate_history(1))
+        display_help_document(markdown_text, help_path, record_history=True)
         help_window.bind("<Escape>", lambda _event: help_window.destroy())
         self._center_window(help_window)
 

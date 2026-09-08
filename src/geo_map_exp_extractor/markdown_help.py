@@ -59,35 +59,61 @@ def resolve_markdown_image_path(target: str, asset_directory: Path | None) -> Pa
 
 
 def configure_markdown_tags(widget: tk.Text) -> None:
-    """Configure readable, native-looking styles for rendered Markdown."""
+    """Configure Markdown styles using the active Tk theme's fonts."""
 
     default_font = tkfont.nametofont("TkDefaultFont").copy()
-    default_font.configure(size=10)
     fixed_font = tkfont.nametofont("TkFixedFont").copy()
-    fixed_font.configure(size=9)
-    heading_fonts: dict[int, tkfont.Font] = {}
-    for level, size in ((1, 18), (2, 15), (3, 13)):
-        heading_font = default_font.copy()
-        heading_font.configure(size=size, weight="bold")
-        heading_fonts[level] = heading_font
-        widget.tag_configure(
-            f"heading{level}",
-            font=heading_font,
-            foreground="#17365D",
-            spacing1=14 if level == 1 else 10,
-            spacing3=5,
-        )
+    base_size = abs(int(default_font.cget("size")))
+    heading1_font = default_font.copy()
+    heading1_font.configure(size=base_size + 8, weight="bold")
+    heading2_font = default_font.copy()
+    heading2_font.configure(size=base_size + 5, weight="bold")
+    heading3_font = default_font.copy()
+    heading3_font.configure(size=base_size + 2, weight="bold")
+    strong_font = default_font.copy()
+    strong_font.configure(weight="bold")
+    emphasis_font = default_font.copy()
+    emphasis_font.configure(slant="italic")
+    table_title_font = default_font.copy()
+    table_title_font.configure(weight="bold")
+    table_label_font = default_font.copy()
+    table_label_font.configure(weight="bold")
 
     # Keep font objects referenced for the life of the widget.
-    widget._markdown_fonts = (default_font, fixed_font, *heading_fonts.values())  # type: ignore[attr-defined]
-    widget.tag_configure("strong", font=(default_font.actual("family"), 10, "bold"))
-    widget.tag_configure("emphasis", font=(default_font.actual("family"), 10, "italic"))
+    widget._markdown_fonts = (  # type: ignore[attr-defined]
+        default_font,
+        fixed_font,
+        heading1_font,
+        heading2_font,
+        heading3_font,
+        strong_font,
+        emphasis_font,
+        table_title_font,
+        table_label_font,
+    )
+    widget.configure(font=default_font)
+    widget.tag_configure("heading1", font=heading1_font, foreground="#17365D", spacing1=8, spacing3=10)
+    widget.tag_configure("heading2", font=heading2_font, foreground="#1F4E79", spacing1=14, spacing3=7)
+    widget.tag_configure("heading3", font=heading3_font, foreground="#2F5597", spacing1=10, spacing3=5)
+    widget.tag_configure("strong", font=strong_font)
+    widget.tag_configure("emphasis", font=emphasis_font)
     widget.tag_configure("inline_code", font=fixed_font, background="#F1F3F5")
-    widget.tag_configure("code_block", font=fixed_font, background="#F1F3F5", lmargin1=16, lmargin2=16)
+    widget.tag_configure(
+        "code_block",
+        font=fixed_font,
+        background="#F3F5F7",
+        lmargin1=18,
+        lmargin2=18,
+        rmargin=18,
+        spacing1=2,
+        spacing3=2,
+    )
     widget.tag_configure("link", foreground="#0563C1", underline=True)
+    widget.tag_bind("link", "<Enter>", lambda _event: widget.configure(cursor="hand2"))
+    widget.tag_bind("link", "<Leave>", lambda _event: widget.configure(cursor="arrow"))
     widget.tag_configure("list_marker", foreground="#1F4E79", lmargin1=12, lmargin2=30)
-    widget.tag_configure("table_title", font=(default_font.actual("family"), 10, "bold"), foreground="#17365D")
-    widget.tag_configure("table_label", font=(default_font.actual("family"), 10, "bold"))
+    widget.tag_configure("table_title", font=table_title_font, foreground="#17365D", spacing1=4)
+    widget.tag_configure("table_label", font=table_label_font)
     widget.tag_configure("markdown_image", justify="center", spacing1=6, spacing3=6)
     widget.tag_configure("image_error", foreground="#7F6000", lmargin1=18, lmargin2=18)
 
