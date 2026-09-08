@@ -105,7 +105,7 @@ def test_run_extraction_job_writes_manifest(tmp_path: Path, monkeypatch) -> None
         image_path=image_path,
         profile_path=Path("profiles/water_production.yml"),
         output_dir=tmp_path / "runs",
-        model="gpt-5.5",
+        model="gpt-5.6-sol",
         extraction_runner=_fake_runner,
         timestamp=datetime(2026, 5, 6, 12, 30, tzinfo=timezone.utc),
     )
@@ -133,8 +133,9 @@ def test_run_extraction_job_writes_manifest(tmp_path: Path, monkeypatch) -> None
     assert manifest["original_image_dimensions"] == {"width": 1600, "height": 1200}
     assert manifest["profile_id"] == "water_production"
     assert manifest["profile_fields"] == result.fields
-    assert manifest["model"] == "gpt-5.5"
+    assert manifest["model"] == "gpt-5.6-sol"
     assert manifest["reasoning_effort"] == "medium"
+    assert manifest["service_tier"] == "default"
     assert manifest["image_detail"] == "high"
     assert manifest["max_output_tokens"] == 12000
     assert manifest["api_call_mode"] == "fresh_api_call"

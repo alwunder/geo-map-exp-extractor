@@ -8,10 +8,12 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from geo_map_exp_extractor.env_utils import load_env_from_candidates
+from geo_map_exp_extractor.env_utils import default_env_candidates, load_env_from_candidates
 from geo_map_exp_extractor.jobs import ExtractionJobResult, run_extraction_job
 from geo_map_exp_extractor.settings import (
     DEFAULT_MAX_IMAGE_SIDE_PX,
+    DEFAULT_SERVICE_TIER,
+    SUPPORTED_SERVICE_TIERS,
 )
 
 app = typer.Typer(help="Extract structured tables from geologic map explanation images.")
@@ -19,8 +21,7 @@ console = Console()
 
 
 def _load_env(env_file: Path | None) -> None:
-    repo_env = Path(__file__).resolve().parents[2] / ".env"
-    candidates: list[Path] = [Path.cwd() / ".env", repo_env]
+    candidates = default_env_candidates()
     if env_file is not None:
         candidates.insert(0, env_file)
     load_env_from_candidates(candidates)
@@ -80,6 +81,13 @@ def single_run(
         str | None,
         typer.Option("--reasoning-effort", help="Reasoning effort: none, low, medium, high, xhigh."),
     ] = None,
+    service_tier: Annotated[
+        str,
+        typer.Option(
+            "--service-tier",
+            help=f"Processing tier: {', '.join(SUPPORTED_SERVICE_TIERS)}.",
+        ),
+    ] = DEFAULT_SERVICE_TIER,
     image_detail: Annotated[
         str | None,
         typer.Option("--image-detail", help="Image detail level: high, auto, or low."),
@@ -145,6 +153,7 @@ def single_run(
         output_dir=out_dir,
         model=model,
         reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
         image_detail=image_detail,
         max_output_tokens=max_output_tokens,
         use_max_output_tokens_limit=not no_max_output_tokens_limit,
@@ -186,6 +195,13 @@ def batch_run(
         str | None,
         typer.Option("--reasoning-effort", help="Reasoning effort: none, low, medium, high, xhigh."),
     ] = None,
+    service_tier: Annotated[
+        str,
+        typer.Option(
+            "--service-tier",
+            help=f"Processing tier: {', '.join(SUPPORTED_SERVICE_TIERS)}.",
+        ),
+    ] = DEFAULT_SERVICE_TIER,
     image_detail: Annotated[
         str | None,
         typer.Option("--image-detail", help="Image detail level: high, auto, or low."),
@@ -259,6 +275,7 @@ def batch_run(
             output_dir=out_dir,
             model=model,
             reasoning_effort=reasoning_effort,
+            service_tier=service_tier,
             image_detail=image_detail,
             max_output_tokens=max_output_tokens,
             use_max_output_tokens_limit=not no_max_output_tokens_limit,

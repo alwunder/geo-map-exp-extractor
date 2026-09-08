@@ -1,9 +1,12 @@
 from pathlib import Path
 
+import pytest
+
 from geo_map_exp_extractor.config import load_profile
 from geo_map_exp_extractor.openai_runner import (
     _extract_usage,
     _is_incomplete_for_max_output_tokens,
+    _validate_request_options,
     validate_extraction_data,
 )
 
@@ -51,3 +54,13 @@ def test_extract_usage_includes_reasoning_tokens() -> None:
 def test_detects_max_output_tokens_incomplete_response() -> None:
     raw = {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}
     assert _is_incomplete_for_max_output_tokens(raw) is True
+
+
+def test_gpt_6_astra_rejects_unsupported_none_reasoning_effort() -> None:
+    with pytest.raises(ValueError, match="low, medium"):
+        _validate_request_options("gpt-6-astra", "none", "default")
+
+
+def test_known_model_rejects_unsupported_service_tier() -> None:
+    with pytest.raises(ValueError, match="service tier"):
+        _validate_request_options("gpt-5.6-sol", "medium", "ultrafast")
