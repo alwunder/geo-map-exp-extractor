@@ -46,35 +46,15 @@ This workflow was designed to address these common challenges when parsing a DMU
 7. *Review and refinement* - Human review remains an explicit part of the workflow. The GUI allows reviewers to edit extracted cells, add or remove rows, change row order, assign review statuses, and record comments or run-level notes. Reviewed results are saved separately from the original model output so that corrections remain traceable. Corrected examples can also be promoted as reference data for regression testing and deliberate improvement of profiles and extraction instructions. This is a key point: the application does not silently re-train itself or modify user prompts based on corrections made to the output; improvements must remain intentional and reviewable. Step 7 is a human feedback loop: the reviewer learns from the result and can improve the profile, notes, or extraction instructions. This application and workflow are designed to deliberately preserve critical human oversight.
 
 
-## Using a web interface versus this API workflow
+## Using this API workflow versus a web interface
 
-Uploading an image to the ChatGPT web interface can be useful for exploration, testing an idea, discussing an unusual panel, or performing a one-time extraction. It is conversational by design: the user supplies instructions in a chat, reviews the response, and may refine the request through follow-up messages. That flexibility is valuable, but it can be difficult to reproduce the exact prompt, settings, output format/schema, and review history across many images or users.
+Uploading an image to the ChatGPT (or other vision-capable model) web interface can be useful for exploration, testing an idea, discussing an unusual panel, or performing a one-time extraction. It is conversational by design: the user supplies instructions in a chat, reviews the response, and may refine the request through follow-up messages. That flexibility is valuable, but it can be difficult to reproduce the exact prompt, settings, output format/schema, and review history across many images or users.
 
 This software uses the OpenAI API to make the extraction process programmatic and inspectable. For each run, it can submit the same prompt template, profile, schema, model settings, and image-processing rules; validate the returned structure; preserve artifacts; reuse an identical cached request; and export the result in a known field order. The GUI provides a convenient desktop interface to this API workflow, while the CLI makes the same workflow available for scripted or confirmed batch use.
 
 "Repeatable" describes the controlled process, *not a promise that a generative model will always return byte-for-byte identical text*. Model outputs are probabilistic and can vary, scans can be ambiguous, and structured output still requires validation and human review. Profiles, notes, fixed settings, caching, and saved corrections reduce much of the *avoidable* variation and make differences easier to identify, explain, and improve deliberately.
 
 The project is *not* a bulk OCR utility and does not auto-learn by silently rewriting prompts or profiles. Improvements remain in the hands of the operator--intentional and reviewable.
-
-## API key and billing
-
-This software was designed using the OpenAI API, thus a key is required for live image extraction because the application sends the prepared image, prompt, and schema to the OpenAI API. Dry runs and local review operations such as editing, saving, loading, and promoting existing results do not require an API call.
-
-### Getting an API key
-
-1. Sign in to an OpenAI account, or create one, at the [OpenAI API Keys page](https://platform.openai.com/api-keys). This page requires an account and login.
-2. Select **Create new secret key** and configure the key for the appropriate API project and permissions.
-3. Copy the new secret immediately and store it securely. OpenAI displays the full secret only when it is created; if it is lost, create a replacement key.
-4. Configure API billing or credits for the API account if required. API usage and billing are separate from ChatGPT subscriptions, so a paid ChatGPT plan does not by itself include API usage.
-5. Set the key as `OPENAI_API_KEY` in your shell environment or place it in a repo-local `.env` file as shown below. The GUI's `Set API key...` control can also set a temporary override for the current session.
-
-IMPORTANT: Treat an API key like a password: do not share it, paste it into issues or logs, or commit it to source control. Do not store a real key in `.env.example`; that file is a template only. The application never logs or writes the key when processing images.
-
-Example `.env`:
-
-```env
-OPENAI_API_KEY=your_real_key_here
-```
 
 ## Windows — ready-to-run deployment
 
@@ -92,9 +72,9 @@ Python or uv, or manual virtual-environment setup.
 3. Double-click **Run Geo Map Exp Extractor.bat**.
 4. Allow the first launch to prepare the private Python runtime and application environment for
    your Windows account. Subsequent launches are much faster.
-5. In the application, use **Set API key...** to provide an OpenAI API key for the current session,
-   then use the application normally. The session key is application configuration, not part of
-   deployment setup, and the GUI can open without it.
+5. For a one-time session, use **Set API key...** in the application. For a persistent key, create
+   `%LOCALAPPDATA%\GeoMapExpExtractor\.env` as described in [API key and billing](#api-key-and-billing).
+   The GUI can open without a key.
 
 The deployment ZIP includes its verified bootstrap executable. First setup still requires
 permitted HTTPS access to download managed Python and the locked Python packages. It uses the
@@ -176,6 +156,37 @@ geo-map-exp-extractor batch `
   --out-dir outputs
 ```
 
+## API key and billing
+
+This software was designed using the OpenAI API, thus a key is required for live image extraction because the application sends the prepared image, prompt, and schema to the OpenAI API. Dry runs and local review operations such as editing, saving, loading, and promoting existing results do not require an API call.
+
+### Getting an API key
+
+1. Sign in to an OpenAI account, or create one, at the [OpenAI API Keys page](https://platform.openai.com/api-keys). This page requires an account and login.
+2. Select **Create new secret key** and configure the key for the appropriate API project and permissions.
+3. Copy the new secret immediately and store it securely. OpenAI displays the full secret only when it is created; if it is lost, create a replacement key.
+4. Configure API billing or credits for the API account if required. API usage and billing are separate from ChatGPT subscriptions, so a paid ChatGPT plan does not by itself include API usage.
+5. Choose one of the `.env` locations described below and save the key as `OPENAI_API_KEY`.
+6. The GUI's `Set API key...` control can also set a temporary override for the current app session.
+
+For the Windows release, use the per-user settings file:
+
+```text
+%LOCALAPPDATA%\GeoMapExpExtractor\.env
+```
+
+If you are a first-time user and want to store your API key in an `.env` file for the application to consume, open File Explorer, paste `%LOCALAPPDATA%` into the address bar, navigate to the folder `GeoMapExpExtractor` (create it if it does not exist), and create a new text file named `.env` inside it. Be sure Windows has not silently named it `.env.txt`.
+
+For developers running this source checkout, copy [`.env.example`](src/geo_map_exp_extractor/.env.example) to `.env` in that same `src\geo_map_exp_extractor` folder, then edit the copy. The app also recognizes a `.env` in the folder from which it is launched for temporary or project-specific use.
+
+IMPORTANT: Treat an API key like a password: do not share it, paste it into issues or logs, or commit it to source control. *Do not store a real key in `.env.example`; that file is a template only.* The application never logs or writes the key when processing images.
+
+Example `.env`:
+
+```env
+OPENAI_API_KEY=your_real_key_here
+```
+
 ## GUI usage
 
 Launch:
@@ -192,14 +203,15 @@ The GUI is a single-image extraction and review workbench. It shows a charge war
 - `Profile`: the YAML profile that defines the extraction task, output columns and column order, text-preservation rules, and special instructions. Selecting a profile also loads its saved model and processing defaults.
 - `Output`: the parent directory in which the app creates a timestamped, auditable run folder.
 - `Use profile notes`: appends the optional `profiles/<profile>.notes.md` file to the extraction prompt. Enable this only when those reviewed notes are relevant to the selected profile.
-- `Set API key...`: sets an API key override for the current GUI session. `Use .env key` returns to the key loaded from `OPENAI_API_KEY` or the repo-local `.env` file. The key is not written into run artifacts.
+- `Set API key...`: sets an API key override for the current GUI session. `Use .env key` returns to the key loaded from `OPENAI_API_KEY` or the configured `.env` file, normally `%LOCALAPPDATA%\GeoMapExpExtractor\.env` for the Windows release. The key is not written into run artifacts.
 - `Open output folder`: opens the active run folder, or the selected output directory before a run exists.
 - `Help`: opens this README inside the application.
 
 ### API call options
 
-- `Model`: chooses the OpenAI API model used for extraction. `gpt-5.6-sol` is the current default. The full list is `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.6-sol`, and experimental `chat-latest`.
-- `Reasoning effort`: controls how much reasoning work the model may perform. `none` or `low` can reduce latency and token use; `medium` is the default; `high` and `xhigh` are intended for difficult scans or layouts and may take longer and cost more. Support can vary by model.
+- `Model`: chooses the OpenAI API model used for extraction. The built-in list is `gpt-6-astra`, `gpt-5.6-sol` (the default), `gpt-5.6-terra`, and `gpt-5.6-luna`. Running the pricing updater can refresh this list from the official OpenAI documentation.
+- `Reasoning effort`: controls how much reasoning work the model may perform. The available efforts are derived from the selected model's catalog entry, so unsupported combinations cannot be selected.
+- `Service tier`: chooses OpenAI processing and pricing mode. `default` is the normal API rate, `flex` is lower-cost asynchronous processing, and `fast` is a higher-cost low-latency option. Availability can depend on the API account and region.
 - `Image detail`: controls how the API processes the image. `high` is the recommended default for small geologic text and complex panels; `low` can be faster and cheaper but may lose fine detail; `auto` lets the API choose.
 - `Dry run (no API call)`: prepares the image, prompt, schema, hashes, and run artifacts without sending a request or incurring an extraction charge. Use it to verify configuration before a live run.
 - `Force re-run`: bypasses an existing matching cache entry and makes a fresh API request. Leave it off to reuse cached output when the image and request settings have not changed.
@@ -207,7 +219,7 @@ The GUI is a single-image extraction and review workbench. It shows a charge war
 - `Apply maximum output token limit`: sends the adjacent value as `max_output_tokens`, which covers both reasoning and final output tokens. The default is `12000`. Increase it if a large table is truncated; disable the checkbox to omit the cap. Larger limits permit, but do not guarantee, greater token usage.
 - `Run extraction`: validates the selections, requests confirmation for a live call, then runs extraction. An identical request may be served from cache unless `Force re-run` is enabled.
 
-Model, reasoning effort, image detail, token-limit settings, profile content, and the processed image all affect the request. Changing them can produce a different cache fingerprint and result.
+Model, reasoning effort, service tier, image detail, token-limit settings, profile content, and the processed image all affect the request. Changing them can produce a different cache fingerprint and result.
 
 ### Image preview
 
@@ -225,13 +237,15 @@ The table columns come directly from the selected profile and remain in profile 
 
 - Edit a cell directly in the table. In the fallback table view, double-clicking a cell opens a multiline editor; `OK` applies the edit and `Cancel` discards it.
 - `Add row`: inserts a blank row for content the model missed.
+- `Duplicate row`: copies the selected row directly beneath it, so its values can be edited into a separate map unit without re-entering the shared content.
 - `Delete row`: removes the selected row from the corrected result.
 - `Move up` / `Move down`: changes the selected row's position in the output.
 - `Auto-fit rows`: adjusts displayed row heights to make wrapped cell content easier to read.
 - `Reset widths`: restores automatically calculated column widths after manual resizing.
-- `Status`: records the review decision for the selected row. Choose the appropriate review state before applying it.
-- `Comment`: stores an optional reviewer note for the selected row.
-- `Apply`: saves the selected row's status and comment in the current in-memory project. These review details are written to `feedback.jsonl` when the project is saved.
+- `Status`: records the review decision for the selected row or rows. Choose the appropriate review state before applying it.
+- `Comment`: stores an optional reviewer note for the selected row or rows. If you switch rows, run a row operation, or save with unapplied metadata changes, the app asks whether to apply or discard them.
+- `Auto-apply`: when enabled, applies row status and comment changes when the comment box loses focus.
+- `Apply`: saves the selected rows' status and comment in the current in-memory project. These review details are written to `feedback.jsonl` when the project is saved.
 - `Notes`: stores run-level review notes that are written to `notes.md` and included in the feedback log when saved.
 
 Cell changes and row operations are tracked as review feedback. They do not modify the original `extracted.json` or `extracted.csv` files.
@@ -294,21 +308,19 @@ segments/                    # when segmented mode is enabled
 ```
 
 `manifest.json` includes run metadata, hashes, model/detail settings, request fingerprint, fresh-vs-cache mode, usage tokens (when available), estimated cost (when pricing is configured), and output paths.
-It records `model`, `reasoning_effort`, `image_detail`, and `max_output_tokens` for every run.
+It records `model`, `reasoning_effort`, `service_tier`, `image_detail`, and `max_output_tokens` for every run.
 
 ## Model selection guidance
 
 | Use case                                     | Model                     | Reasoning effort | Image detail |
 |----------------------------------------------|---------------------------|------------------|--------------|
-| Cheap quick test                             | `gpt-5.4-mini`            | low or medium    | high         |
-| General extraction                           | `gpt-5.4` or `gpt-5.5`    | medium           | high         |
+| Lowest-cost trial                            | `gpt-5.6-luna`            | low or medium    | high         |
+| Balanced extraction                          | `gpt-5.6-terra`           | medium           | high         |
 | Default production extraction                | `gpt-5.6-sol`             | medium           | high         |
-| Difficult panel / poor scan / complex layout | `gpt-5.6-sol` or `gpt-5.5` | high             | high         |
-| Very difficult audit/review pass             | `gpt-5.5-pro`             | high or xhigh    | high         |
+| Difficult panel / poor scan / complex layout | `gpt-5.6-sol`             | high or xhigh    | high         |
+| Most demanding audit/review pass             | `gpt-6-astra`             | high or xhigh    | high         |
 
-`gpt-5.6-sol` is available in both the GUI model selector and the CLI (`--model gpt-5.6-sol`) and is the current application default. Profiles may specify a different default model, and the GUI applies that setting when a profile is selected.
-
-`chat-latest` is available only as an experimental option; production and repeatable audit runs should prefer fixed model names. Model availability, reasoning support, and pricing depend on the API account and current OpenAI service configuration.
+The GUI exposes the models and model-specific reasoning/service-tier choices from one local catalog. `gpt-5.6-sol` remains the application default. The CLI also accepts `--model` and `--service-tier`; a local cost estimate is available only for catalog models. Model availability, reasoning support, and pricing depend on the API account and current OpenAI service configuration.
 
 ## Cost awareness
 
@@ -317,6 +329,14 @@ Model pricing is manually configurable in:
 - `src/geo_map_exp_extractor/pricing.py`
 
 Post-run cost estimation is based on actual usage fields returned by the API (`input_tokens`, `output_tokens`, `cached_tokens` when present). Pre-run image token numbers are rough estimates only. See [Pricing | OpenAI API](https://developers.openai.com/api/docs/pricing) for the latest OpenAI API pricing.
+
+To update the local catalog without editing Python files, run the following from the application folder, review the displayed values, and confirm the prompt:
+
+```powershell
+python tools/update_pricing.py
+```
+
+The utility fetches OpenAI's official Models and Pricing documentation, checks the featured extraction-capable models, and writes `openai_model_catalog.json`. Use `--check` to preview without writing or `--yes` for a non-interactive update. Restart the app after an update.
 
 ## Review/correction workflow
 

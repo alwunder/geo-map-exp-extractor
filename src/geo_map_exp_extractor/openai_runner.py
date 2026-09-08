@@ -12,8 +12,9 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from geo_map_exp_extractor.config import ExtractionProfile
-from geo_map_exp_extractor.env_utils import load_env_from_candidates
+from geo_map_exp_extractor.env_utils import default_env_candidates, load_env_from_candidates
 from geo_map_exp_extractor.image_io import image_to_data_url
+from geo_map_exp_extractor.pricing import DEFAULT_SERVICE_TIER, get_model_options
 from geo_map_exp_extractor.schema_builder import build_text_format
 from geo_map_exp_extractor.settings import (
     DEFAULT_IMAGE_DETAIL,
@@ -144,11 +145,25 @@ def _extract_usage(raw_response: dict[str, Any]) -> UsageSummary | None:
 def _supports_reasoning_config(model: str) -> bool:
     normalized = model.strip().lower()
     return (
-        normalized.startswith("gpt-5")
+        normalized.startswith(("gpt-5", "gpt-6"))
         or normalized.startswith("o")
         or normalized.endswith("chat-latest")
         or normalized == "chat-latest"
     )
+
+
+def _validate_request_options(model: str, reasoning_effort: str, service_tier: str) -> None:
+    """Raise a clear error for configured options unsupported by a selected model."""
+
+    options = get_model_options(model)
+    if options is None:
+        return
+    if reasoning_effort not in options.reasoning_efforts:
+        supported = ", ".join(options.reasoning_efforts)
+        raise ValueError(f"{model} supports reasoning effort: {supported}; not {reasoning_effort!r}.")
+    if service_tier not in options.service_tiers:
+        supported = ", ".join(options.service_tiers)
+        raise ValueError(f"{model} supports service tier: {supported}; not {service_tier!r}.")
 
 
 def _is_incomplete_for_max_output_tokens(raw_response: dict[str, Any]) -> bool:
@@ -180,8 +195,7 @@ def _resolve_api_key(explicit_api_key: str | None) -> str | None:
     key = os.environ.get("OPENAI_API_KEY")
     if key:
         return key
-    repo_env = Path(__file__).resolve().parents[2] / ".env"
-    load_env_from_candidates([Path.cwd() / ".env", repo_env])
+    load_env_from_candidates(default_env_candidates())
     return os.environ.get("OPENAI_API_KEY")
 
 
@@ -208,6 +222,7 @@ def run_extraction(
     model: str = DEFAULT_MODEL,
     api_key: str | None = None,
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    service_tier: str = DEFAULT_SERVICE_TIER,
     image_detail: str = DEFAULT_IMAGE_DETAIL,
     max_output_tokens: int | None = DEFAULT_MAX_OUTPUT_TOKENS,
     retries: int = DEFAULT_RETRY_ATTEMPTS,
@@ -216,6 +231,7 @@ def run_extraction(
 ) -> ExtractionResult:
     """Send an image and prompt to the OpenAI Responses API and validate the output."""
 
+    _validate_request_options(model, reasoning_effort, service_tier)
     resolved_api_key = _resolve_api_key(api_key)
     if not resolved_api_key:
         msg = (
@@ -232,6 +248,7 @@ def run_extraction(
         try:
             request_payload: dict[str, Any] = {
                 "model": model,
+                "service_tier": service_tier,
                 "input": [
                     {
                         "role": "user",
