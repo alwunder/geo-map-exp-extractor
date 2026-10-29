@@ -4,16 +4,9 @@ Template-driven visual table extraction from images of scanned geologic map expl
 
 `geo-map-exp-extractor` turns visually complex explanation panels (DMUs) into reviewable, structured tables for use in GIS, geology, and publication workflows. It is designed for processing and interpreting material such as stratigraphic columns, formation explanations, engineering-property tables, water-production descriptions, footnotes, and other scanned cartographic text blocks where layout and visual relationships carry meaning.
 
-## Context
+For GeMS preparation, use the new [stratigraphic-column/DMU profile](profiles/stratigraphic_column_gems_dmu.yml). It includes all 15 DMU columns, a pinned toolbox GeoMaterial vocabulary, and explicit hierarchy, paragraph-style, and classification-confidence guidance. See the [GeMS review and import workflow](docs/gems_dmu_review.md) for the assessment, API/prompt changes, dry-run command, and remaining validation requirements. Its output is a reviewable staging table; source IDs, symbology, hierarchy, and database relationships still require review before publication.
 
-For GeMS preparation, use the new
-[stratigraphic-column/DMU profile](profiles/stratigraphic_column_gems_dmu.yml).
-It includes all 15 DMU columns, a pinned toolbox GeoMaterial vocabulary, and
-explicit hierarchy, paragraph-style, and classification-confidence guidance.
-See the [GeMS review and import workflow](docs/gems_dmu_review.md) for the assessment,
-API/prompt changes, dry-run command, and remaining validation requirements.
-Its output is a reviewable staging table; source IDs, symbology, hierarchy, and
-database relationships still require review before publication.
+## Context
 
 The National Geologic Map Database (NGMDB) is engaged in a long-term effort to compile the master DMU table, drawing content from all of Nation's geologic maps whether they are in GIS format (specifically the GeMS schema) or in paper or PDF format.  This master DMU table follows the GeMS schema for the "DescriptionOfMapUnits" table, and is integrated with all other components of the NGMDB's database (see components at https://ngmdb.usgs.gov/), and results from several years of prototyping.  Functionality for content search is forthcoming, after NGMDB staff judge there is sufficient content in this table to warrant deployment.
 
