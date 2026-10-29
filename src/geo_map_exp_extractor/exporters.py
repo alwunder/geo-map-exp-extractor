@@ -4,13 +4,58 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from geo_map_exp_extractor import __version__
 from geo_map_exp_extractor.config import ExtractionProfile
 from geo_map_exp_extractor.image_io import ImageMetadata
+
+
+def write_json_atomic(data: Any, output_path: str | Path) -> Path:
+    """Durably write a complete JSON file, leaving the previous file on failure."""
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return path
+
+
+def write_profile_snapshot(profile: ExtractionProfile, output_path: str | Path) -> Path:
+    """Freeze resolved vocabularies so a saved run has no external CSV dependency."""
+
+    data = profile.model_dump(mode="json")
+    for field, rule in profile.field_rules.items():
+        if rule.vocabulary is not None:
+            data["field_rules"][field]["enum"] = rule.allowed_values
+            data["field_rules"][field]["vocabulary"] = None
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return path
 
 
 def _portable_path(path: str | Path) -> str:

@@ -79,7 +79,9 @@ def single_run(
     model: Annotated[str | None, typer.Option("--model", help="OpenAI model name.")] = None,
     reasoning_effort: Annotated[
         str | None,
-        typer.Option("--reasoning-effort", help="Reasoning effort: none, low, medium, high, xhigh."),
+        typer.Option(
+            "--reasoning-effort", help="Reasoning effort: none, low, medium, high, xhigh."
+        ),
     ] = None,
     service_tier: Annotated[
         str,
@@ -90,7 +92,9 @@ def single_run(
     ] = DEFAULT_SERVICE_TIER,
     image_detail: Annotated[
         str | None,
-        typer.Option("--image-detail", help="Image detail level: high, auto, or low."),
+        typer.Option(
+            "--image-detail", help="Image detail: high, auto, low, or original (model-dependent)."
+        ),
     ] = None,
     max_output_tokens: Annotated[
         int | None,
@@ -109,7 +113,9 @@ def single_run(
     ] = False,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Prepare prompt/schema/image and estimate usage without API."),
+        typer.Option(
+            "--dry-run", help="Prepare prompt/schema/image and estimate usage without API."
+        ),
     ] = False,
     rerun: Annotated[
         bool,
@@ -125,7 +131,9 @@ def single_run(
     ] = DEFAULT_MAX_IMAGE_SIDE_PX,
     segmented_mode: Annotated[
         bool,
-        typer.Option("--segmented-mode", help="Split image into overlapping segments before extraction."),
+        typer.Option(
+            "--segmented-mode", help="Split image into overlapping segments before extraction."
+        ),
     ] = False,
     segment_height_px: Annotated[
         int,
@@ -172,7 +180,9 @@ def single_run(
 
 @app.command("batch")
 def batch_run(
-    image_dir: Annotated[Path, typer.Option("--image-dir", help="Folder of images for batch mode.")],
+    image_dir: Annotated[
+        Path, typer.Option("--image-dir", help="Folder of images for batch mode.")
+    ],
     profile: Annotated[Path, typer.Option("--profile", help="YAML extraction profile.")],
     out_dir: Annotated[
         Path,
@@ -193,7 +203,9 @@ def batch_run(
     model: Annotated[str | None, typer.Option("--model", help="OpenAI model name.")] = None,
     reasoning_effort: Annotated[
         str | None,
-        typer.Option("--reasoning-effort", help="Reasoning effort: none, low, medium, high, xhigh."),
+        typer.Option(
+            "--reasoning-effort", help="Reasoning effort: none, low, medium, high, xhigh."
+        ),
     ] = None,
     service_tier: Annotated[
         str,
@@ -204,7 +216,9 @@ def batch_run(
     ] = DEFAULT_SERVICE_TIER,
     image_detail: Annotated[
         str | None,
-        typer.Option("--image-detail", help="Image detail level: high, auto, or low."),
+        typer.Option(
+            "--image-detail", help="Image detail: high, auto, low, or original (model-dependent)."
+        ),
     ] = None,
     max_output_tokens: Annotated[
         int | None,

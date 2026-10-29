@@ -6,6 +6,15 @@ Template-driven visual table extraction from images of scanned geologic map expl
 
 ## Context
 
+For GeMS preparation, use the new
+[stratigraphic-column/DMU profile](profiles/stratigraphic_column_gems_dmu.yml).
+It includes all 15 DMU columns, a pinned toolbox GeoMaterial vocabulary, and
+explicit hierarchy, paragraph-style, and classification-confidence guidance.
+See the [GeMS review and import workflow](docs/gems_dmu_review.md) for the assessment,
+API/prompt changes, dry-run command, and remaining validation requirements.
+Its output is a reviewable staging table; source IDs, symbology, hierarchy, and
+database relationships still require review before publication.
+
 The National Geologic Map Database (NGMDB) is engaged in a long-term effort to compile the master DMU table, drawing content from all of Nation's geologic maps whether they are in GIS format (specifically the GeMS schema) or in paper or PDF format.  This master DMU table follows the GeMS schema for the "DescriptionOfMapUnits" table, and is integrated with all other components of the NGMDB's database (see components at https://ngmdb.usgs.gov/), and results from several years of prototyping.  Functionality for content search is forthcoming, after NGMDB staff judge there is sufficient content in this table to warrant deployment.
 
 The NGMDB is a Congressionally mandated national archive, managed by the U.S. Geological Survey and built in collaboration with the Nation's State geological surveys (represented by the Association of American State Geologists, or AASG).  Over three decades, the USGS and AASG have built the NGMDB into a truly authoritative system.
@@ -199,7 +208,7 @@ The GUI is a single-image extraction and review workbench. It shows a charge war
 
 ### Input and project controls
 
-- `Image`: the scanned explanation image to extract. Use `Browse...` to select it; the selected image appears in the preview pane.
+- `Image`: the scanned explanation image to extract. Use `Browse...` to select it; the selected image appears in the preview pane. The path display is read-only so image changes always pass through the save check. You can paste a path into the file chooser.
 - `Profile`: the YAML profile that defines the extraction task, output columns and column order, text-preservation rules, and special instructions. Selecting a profile also loads its saved model and processing defaults.
 - `Output`: the parent directory in which the app creates a timestamped, auditable run folder.
 - `Use profile notes`: appends the optional `profiles/<profile>.notes.md` file to the extraction prompt. Enable this only when those reviewed notes are relevant to the selected profile.
@@ -257,7 +266,109 @@ Cell changes and row operations are tracked as review feedback. They do not modi
 - `Load project`: opens an existing run folder containing `manifest.json` and loads `corrected.json` when available, otherwise `extracted.json`. It also restores the source image, notes, and available row review metadata.
 - `Promote corrected`: copies previously saved corrected JSON and CSV files into `examples/gold/<profile_id>/` for future regression testing and profile improvement. Save the project before promoting it.
 
-If the current table, review metadata, or notes contain unsaved changes, the app offers `Yes` (save), `No` (do not save), and `Cancel` choices before clearing the project, loading another project, starting a replacement extraction, or exiting. Clearing is disabled while an extraction is running, and exiting during a running extraction requires separate confirmation.
+If the current table, review metadata, or notes contain unsaved changes, the app offers `Yes` (save), `No` (discard), and `Cancel` choices before loading another image, changing the extraction profile, clearing the project, loading another project, starting a replacement extraction, or exiting. Open table-cell edits and pending notes changes are included in this check. A failed or cancelled save prevents the replacement action.
+
+Loading a different image first checks that it can be read, then runs the save check, clears the project just like `Clear project`, and displays the new image. Select a profile again for the new image. The output directory and session API key are retained. Cancelling the file chooser, choosing the same image, or selecting an unreadable image leaves the current project intact. An invalid profile also leaves the current project and profile selection intact.
+
+Changing images or profiles, opening projects, and clearing are blocked while extraction is running. Exiting during extraction asks to cancel the request and waits for available progress to be saved before closing. Opening a project with no source image clears the previous preview instead of showing an unrelated image.
+
+### Interrupted extraction and continuation
+
+New GUI runs use background Responses and save an atomic `extraction_session.json` checkpoint
+in the project folder. The response ID is saved as soon as the server returns it. Raw responses,
+reported usage, validated complete rows, and segment progress are retained when a request hits
+its token allowance, is cancelled, or loses its connection. Incomplete responses never enter the
+normal result cache. Completed initial requests can still reuse the cache; cached tokens from
+earlier runs are not counted as new spending in the checkpoint's usage totals.
+
+- **Cancel and keep progress** requests cancellation at the API, then saves the returned output.
+  Cancellation can take time and does not refund tokens already used. If completion wins the
+  race with cancellation, the completed response is retained.
+- At an interruption, choose **Continue…**, **Review partial results**, or **Stop and keep progress**.
+  The last two keep the saved partial table open. It remains marked **INCOMPLETE TABLE** and can
+  be saved but cannot be promoted as a completed gold example.
+- Use **Load project**, then **Continue extraction**, to return later. The allowance dialog shows
+  reported usage and asks for a positive maximum output allowance for each new call. Cancelling
+  that dialog makes no request. A second token-limit stop requires another explicit continuation.
+- Continuation saves current review changes and creates a new timestamped project folder. The
+  earlier folder remains intact; notes, review metadata, corrected rows and their original values
+  carry forward. Usage and estimated cost accumulate across the continuation lineage. Estimates
+  may be incomplete when the API has not returned usage for a pending/failed request.
+
+A continuation sends the saved image, frozen profile/prompt and complete saved row prefix as
+context, requesting only subsequent rows in a new structured JSON response. It does not splice
+JSON fragments or extend the original request. An unfinished row is requested again in full.
+The prefix must validate against field order and controlled vocabularies; recovery stops at the
+first incomplete or invalid row. A confirmed boundary and overlap checks help prevent repeats,
+but **review the join for missing/repeated source rows and hierarchy consistency**, especially for
+GeMS. These checks do not certify a complete or GeMS-compliant table. Continuation instructions
+are editable in `prompts/continuation_prompt.md`; the actual instructions sent are recorded with
+each completed attempt.
+
+When a saved response ID is still available, a disconnected request is retrieved before any new
+generation is considered. Retrieval uses that request's original token allowance. If the server
+no longer retains it, the project stays incomplete and reports the retrieval error; it does not
+silently replace the request. A failure before any response ID arrives is ambiguous: the request
+may have run, and an approved continuation may incur overlapping charges. Background creates
+are not automatically retried after such an error.
+
+Saved input hashes are checked before continuation; altered/missing inputs block another call,
+but saved rows can still be reviewed. The checkpoint can rebuild interrupted JSON/CSV/manifest
+exports. Keep CSVs with their JSON/manifest sidecars, which carry the incomplete status. These
+extraction checkpoints are separate from local review autosaves and travel with the run folder.
+Background execution uses `store=true`; API availability and response retention still apply.
+This workflow applies to new GUI runs; legacy runs and the existing CLI failure path do not have
+continuation checkpoints. No additional calls are made merely by loading or reviewing a project.
+
+The token allowance includes reasoning and visible output, so there is no precise live countdown
+or promise that any rows exist when it runs out. New continuation calls are billed for their
+input context and generated tokens. See the official [reasoning guide](https://developers.openai.com/api/docs/guides/reasoning)
+and [background cancellation guide](https://developers.openai.com/api/docs/guides/background).
+
+### Automatic recovery copies
+
+Recovery autosave is enabled automatically once an extraction result or saved project is open.
+It saves changed review content after **30 seconds without further edits**, or after **two minutes
+of continuous editing**. Changes are checked every five seconds, so these intervals are approximate.
+Unchanged content is not repeatedly written. The status bar shows the most recent recovery save
+or an error; failed writes are retried after 30 seconds without interrupting editing.
+
+Recovery copies include table cells (including an open cell editor), row additions/deletions/order,
+original values used for review feedback, row statuses and comments, unapplied review comments,
+feedback records, and notes. Autosave reads unfinished edits without closing the editor or moving
+the cursor. It does not save API keys, image bytes, or credentials, and never makes an API call.
+
+These are **recovery copies**, separate from explicit `Save project` outputs. The unsaved-changes
+indicator and Save/Discard/Cancel prompts remain meaningful. Successful Save removes the session's
+recovery copies; explicitly discarding a project also removes them. Cancel leaves them intact.
+The writer finishes before cleanup, preventing a delayed autosave from recreating a discarded copy.
+
+After an unexpected exit, the app offers recovery on startup. You can also use `Recover autosave...`
+in the status bar, or open the original project folder. Choose Yes to restore a copy for review,
+No to discard that copy, or Cancel to leave it for later. Recovery does not overwrite saved outputs;
+use `Save project` after reviewing restored work. If the saved project changed since the snapshot,
+the app asks before restoring it. Unreadable recovery files are reported and retained.
+
+On Windows, recovery snapshots live in `%LOCALAPPDATA%\GeoMapExpExtractor\recovery`, so a temporary
+network-drive outage does not prevent the local copy from being written. They are local to this
+computer/user and do not travel with a copied project folder. Keep the original project folder
+available: recovery uses its manifest and extraction data to identify the run. Different application
+sessions use separate snapshot files. macOS uses `~/Library/Application Support/GeoMapExpExtractor/recovery`;
+Linux uses `$XDG_STATE_HOME/GeoMapExpExtractor/recovery` (or `~/.local/state` when unset).
+
+Each snapshot is written to a temporary file, flushed, and atomically replaces the previous copy.
+A recovery checkpoint is also attempted before explicit saving. If a crash interrupts a manual
+save, recovery can use `extracted.json` even when `corrected.json`, notes, or feedback are damaged,
+then restore the coherent snapshot. A failed recovery checkpoint does not prevent an explicit
+save to a writable project folder. Explicit saves still span multiple output files; they are not
+a single filesystem transaction. Review autosave does not preserve image/profile setup before
+an extraction result exists; interrupted API work uses the separate extraction checkpoints
+described above. Neither mechanism is a substitute for project backups.
+
+The timing is deliberately shorter than the 5–10 minute AutoRecover interval suggested in
+[Microsoft's recovery guidance](https://support.microsoft.com/en-us/office/collab-files/help-protect-your-files-in-case-of-a-crash):
+these review snapshots are small and keep a separate copy rather than repeatedly exporting the
+project. The idle delay reduces disk activity while the two-minute cap bounds lost review work.
 
 The status bar at the bottom reports the current operation, completion state, cache use, save state, and errors.
 

@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from PIL import Image, ImageTk
+
 try:
     from tksheet import Sheet
 except ImportError:  # pragma: no cover - optional GUI dependency
@@ -29,6 +30,9 @@ if __package__ is None or __package__ == "":
 
 from geo_map_exp_extractor.config import load_profile
 from geo_map_exp_extractor.env_utils import default_env_candidates, load_env_from_candidates
+from geo_map_exp_extractor.gui_recovery import RecoveryMixin
+from geo_map_exp_extractor.gui_extraction import ExtractionContinuationMixin
+from geo_map_exp_extractor.recovery import AUTOSAVE_POLL_MS, RecoveryRecord, project_revision
 from geo_map_exp_extractor.jobs import (
     ExtractionJobResult,
     ProjectLoadError,
@@ -54,7 +58,7 @@ from geo_map_exp_extractor.settings import (
 from geo_map_exp_extractor.pricing import get_model_options
 
 
-class ReviewWorkbench(tk.Tk):
+class ReviewWorkbench(ExtractionContinuationMixin, RecoveryMixin, tk.Tk):
     """Small, functional GUI for running extraction and correcting rows."""
 
     def __init__(self) -> None:
@@ -115,15 +119,21 @@ class ReviewWorkbench(tk.Tk):
         self._run_thread: threading.Thread | None = None
         self._worker_result: ExtractionJobResult | None = None
         self._worker_error: Exception | None = None
+        self._cancel_event = threading.Event()
+        self._continuing_extraction = False
+        self._close_when_stopped = False
         self._progress_dialog: tk.Toplevel | None = None
         self._progress_elapsed = tk.StringVar(value="Elapsed: 00:00")
         self._progress_started_at: datetime | None = None
 
+        self._init_recovery()
         self._build_widgets()
         self.model.trace_add("write", self._sync_model_options)
         self._sync_model_options()
         self._refresh_profiles()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._recovery_timer = self.after(AUTOSAVE_POLL_MS, self._autosave_tick)
+        self.after(500, self._recover_autosave)
 
     def _default_profile_path(self) -> Path:
         profiles = self._profiles_dir()
@@ -185,7 +195,11 @@ class ReviewWorkbench(tk.Tk):
         return f"{minutes:02d}:{seconds:02d}"
 
     def _set_status_message(self, message: str) -> None:
-        suffix = " | unsaved changes" if self.result is not None and self.has_unsaved_changes else ""
+        if self.result is not None and self.result.manifest.get("continuation_available"):
+            message = f"INCOMPLETE TABLE — {message}"
+        suffix = (
+            " | unsaved changes" if self.result is not None and self.has_unsaved_changes else ""
+        )
         self.status.set(f"{message}{suffix}")
 
     def _mark_unsaved(self) -> None:
@@ -299,14 +313,19 @@ class ReviewWorkbench(tk.Tk):
 
         def save_key() -> None:
             value = key_var.get().strip()
-            if env_loaded_via_button["value"] and value == (os.environ.get("OPENAI_API_KEY") or "").strip():
+            if (
+                env_loaded_via_button["value"]
+                and value == (os.environ.get("OPENAI_API_KEY") or "").strip()
+            ):
                 self.api_key_override = None
             else:
                 self.api_key_override = value or None
             self.status.set(self._api_key_status_message())
             dialog.destroy()
 
-        ttk.Button(buttons, text="Use .env key", command=use_env_key).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(buttons, text="Use .env key", command=use_env_key).pack(
+            side=tk.LEFT, padx=(0, 8)
+        )
         ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(buttons, text="Save", command=save_key).pack(side=tk.LEFT)
 
@@ -324,10 +343,10 @@ class ReviewWorkbench(tk.Tk):
         top = ttk.Frame(self, padding=8)
         top.pack(side=tk.TOP, anchor=tk.NW)
 
-        self._path_row(top, "Image:", self.image_path, self._browse_image, row=0)
+        self._path_row(top, "Image:", self.image_path, self._browse_image, row=0, readonly=True)
         self._profile_row(top, row=1)
         self._path_row(top, "Output:", self.output_dir, self._browse_output, row=2)
-        
+
         ttk.Button(top, text="Help", command=self._show_help).grid(
             row=0, column=9, sticky="we", ipadx=4
         )
@@ -349,7 +368,9 @@ class ReviewWorkbench(tk.Tk):
             state="readonly",
         )
         self.model_combo.grid(row=3, column=1, columnspan=2, sticky="we", padx=2, pady=2)
-        ttk.Label(top, text="Reasoning effort:").grid(row=4, column=0, sticky="w", padx=(0, 4), pady=2)
+        ttk.Label(top, text="Reasoning effort:").grid(
+            row=4, column=0, sticky="w", padx=(0, 4), pady=2
+        )
         self.reasoning_effort_combo = ttk.Combobox(
             top,
             textvariable=self.reasoning_effort,
@@ -376,25 +397,32 @@ class ReviewWorkbench(tk.Tk):
             state="readonly",
         ).grid(row=6, column=1, sticky="w", padx=2, pady=2)
 
-        ttk.Label(top, text="API call options:").grid(row=3, column=3, sticky="e", padx=(20, 0), pady=2)
+        ttk.Label(top, text="API call options:").grid(
+            row=3, column=3, sticky="e", padx=(20, 0), pady=2
+        )
         ttk.Checkbutton(top, text="Dry run (no API call)", variable=self.dry_run).grid(
             row=3, column=4, sticky="w", pady=2, padx=4
         )
         ttk.Checkbutton(top, text="Force re-run", variable=self.force_rerun).grid(
             row=3, column=5, sticky="w", pady=2, padx=4
         )
-        ttk.Checkbutton(top, text="Segmented mode (higher cost)", variable=self.segmented_mode).grid(
-            row=3, column=6, sticky="w", pady=2, padx=(4,50)
-        )
-        ttk.Checkbutton(top, text="Apply maximum output token limit:", variable=self.use_max_output_tokens_limit).grid(
-            row=4, column=4, columnspan=2, sticky="e", pady=2
-        )
+        ttk.Checkbutton(
+            top, text="Segmented mode (higher cost)", variable=self.segmented_mode
+        ).grid(row=3, column=6, sticky="w", pady=2, padx=(4, 50))
+        ttk.Checkbutton(
+            top, text="Apply maximum output token limit:", variable=self.use_max_output_tokens_limit
+        ).grid(row=4, column=4, columnspan=2, sticky="e", pady=2)
         ttk.Entry(top, textvariable=self.max_output_tokens, width=10).grid(
             row=4, column=6, sticky="w", padx=0, pady=2
         )
 
         self.run_button = ttk.Button(top, text="Run extraction", command=self._run_extraction)
-        self.run_button.grid(row=5, column=6, sticky="we", padx=(4,0), ipadx=20)
+        self.run_button.grid(row=5, column=6, sticky="we", padx=(4, 0), ipadx=20)
+        ttk.Button(top, text="Continue extraction", command=self._continue_extraction).grid(
+            row=5,
+            column=7,
+            padx=4,
+        )
 
         ttk.Button(top, text="Clear project", command=self._clear_project).grid(
             row=5, column=9, sticky="e", padx=2, ipadx=4
@@ -406,7 +434,7 @@ class ReviewWorkbench(tk.Tk):
             row=5, column=11, padx=2, ipadx=4
         )
         ttk.Button(top, text="Promote corrected", command=self._promote_corrected).grid(
-            row=5, column=12, padx=(50,0), ipadx=4
+            row=5, column=12, padx=(50, 0), ipadx=4
         )
         top.columnconfigure(1, weight=1)
 
@@ -422,9 +450,7 @@ class ReviewWorkbench(tk.Tk):
         ttk.Button(controls, text="Zoom +", command=lambda: self._set_zoom(self.zoom * 1.25)).pack(
             side=tk.LEFT
         )
-        ttk.Button(controls, text="100%", command=lambda: self._set_zoom(1.0)).pack(
-            side=tk.LEFT
-        )
+        ttk.Button(controls, text="100%", command=lambda: self._set_zoom(1.0)).pack(side=tk.LEFT)
         ttk.Button(controls, text="Zoom Width", command=self._zoom_width).pack(side=tk.LEFT)
         ttk.Button(controls, text="Zoom Extents", command=self._zoom_extents).pack(side=tk.LEFT)
         canvas_frame = ttk.Frame(preview_frame)
@@ -448,19 +474,21 @@ class ReviewWorkbench(tk.Tk):
         right.columnconfigure(0, weight=1)
         table_controls = ttk.Frame(right)
         table_controls.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        ttk.Button(table_controls, text="Add row", command=self._add_row).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(table_controls, text="Add row", command=self._add_row).pack(
+            side=tk.LEFT, padx=(10, 0)
+        )
         ttk.Button(table_controls, text="Duplicate row", command=self._duplicate_selected_row).pack(
             side=tk.LEFT, padx=(4, 0)
         )
         ttk.Button(table_controls, text="Delete row", command=self._delete_selected_row).pack(
             side=tk.LEFT, padx=(4, 0)
         )
-        ttk.Button(table_controls, text="Move up", command=lambda: self._move_selected_row(-1)).pack(
-            side=tk.LEFT, padx=(4, 0)
-        )
-        ttk.Button(table_controls, text="Move down", command=lambda: self._move_selected_row(1)).pack(
-            side=tk.LEFT, padx=(4, 0)
-        )
+        ttk.Button(
+            table_controls, text="Move up", command=lambda: self._move_selected_row(-1)
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(
+            table_controls, text="Move down", command=lambda: self._move_selected_row(1)
+        ).pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(table_controls, text="Auto-fit rows", command=self._auto_fit_rows).pack(
             side=tk.LEFT, padx=(8, 0)
         )
@@ -481,7 +509,9 @@ class ReviewWorkbench(tk.Tk):
         self.row_status_combo.pack(side=tk.LEFT)
         self.row_status_combo.bind("<<ComboboxSelected>>", self._apply_selected_row_metadata)
         ttk.Label(table_controls, text="Comment").pack(side=tk.LEFT, padx=(10, 2))
-        self.row_comment_entry = ttk.Entry(table_controls, textvariable=self.row_comment_var, width=26)
+        self.row_comment_entry = ttk.Entry(
+            table_controls, textvariable=self.row_comment_var, width=26
+        )
         self.row_comment_entry.pack(side=tk.LEFT)
         self.row_comment_entry.bind("<Return>", self._apply_selected_row_metadata)
         self.row_comment_entry.bind("<FocusOut>", self._auto_apply_row_metadata_on_focus_out)
@@ -547,12 +577,29 @@ class ReviewWorkbench(tk.Tk):
         status_frame = ttk.Frame(self, padding=(8, 4))
         status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         ttk.Label(status_frame, textvariable=self.status).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(status_frame, textvariable=self.recovery_status).pack(side=tk.RIGHT)
+        ttk.Button(status_frame, text="Recover autosave...", command=self._recover_autosave).pack(
+            side=tk.RIGHT,
+            padx=8,
+        )
 
     def _path_row(
-        self, parent: ttk.Frame, label: str, variable: tk.StringVar, command: Any, row: int
+        self,
+        parent: ttk.Frame,
+        label: str,
+        variable: tk.StringVar,
+        command: Any,
+        row: int,
+        *,
+        readonly: bool = False,
     ) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 4), pady=2)
-        ttk.Entry(parent, textvariable=variable, width=120).grid(row=row, column=1, columnspan=7, sticky="we", pady=2)
+        ttk.Entry(
+            parent,
+            textvariable=variable,
+            width=120,
+            state="readonly" if readonly else "normal",
+        ).grid(row=row, column=1, columnspan=7, sticky="we", pady=2)
         ttk.Button(parent, text="Browse...", command=command).grid(row=row, column=8, padx=4)
 
     def _profile_row(self, parent: ttk.Frame, row: int) -> None:
@@ -577,18 +624,23 @@ class ReviewWorkbench(tk.Tk):
             self.profile_path.set("")
 
     def _on_profile_selected(self, _: tk.Event[Any]) -> None:
+        if self._block_while_running("changing the extraction profile"):
+            self.profile_path.set(self._active_profile_path)
+            return
         selected = self.profile_path.get().strip()
         if not selected:
+            return
+        profile_file = Path(selected)
+        profile = self._read_selected_profile(profile_file)
+        if profile is None:
+            self.profile_path.set(self._active_profile_path)
             return
         if not self._confirm_save_before("changing the extraction profile"):
             self.profile_path.set(self._active_profile_path)
             return
-        profile_file = Path(selected)
-        if not profile_file.is_file():
-            messagebox.showerror("Invalid profile", f"Profile not found: {profile_file}", parent=self)
-            self.profile_path.set("")
+        if not self._end_project_recovery():
+            self.profile_path.set(self._active_profile_path)
             return
-        profile = load_profile(profile_file)
         self._active_profile_path = self._display_path(profile_file)
         self._apply_profile_settings(profile)
         self.result = None
@@ -614,6 +666,15 @@ class ReviewWorkbench(tk.Tk):
         self.image_detail.set(profile.image_detail)
         self.max_output_tokens.set(profile.max_output_tokens)
 
+    def _read_selected_profile(self, path: Path) -> Any | None:
+        """Validate a candidate before changing the active project or selection."""
+
+        try:
+            return load_profile(path)
+        except Exception as exc:  # noqa: BLE001 - surface file/YAML/validation errors in the GUI.
+            messagebox.showerror("Invalid profile", str(exc), parent=self)
+            return None
+
     def _sync_model_options(self, *_: str) -> None:
         """Keep model-specific reasoning and service-tier selectors compatible."""
 
@@ -629,24 +690,49 @@ class ReviewWorkbench(tk.Tk):
             self.service_tier.set(DEFAULT_SERVICE_TIER)
 
     def _browse_image(self) -> None:
+        if self._block_while_running("loading another image"):
+            return
         path = filedialog.askopenfilename(
-            filetypes=[("Images", "*.png *.jpg *.jpeg *.tif *.tiff *.bmp"), ("All files", "*.*")]
+            parent=self,
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.tif *.tiff *.bmp"), ("All files", "*.*")],
         )
-        if path:
-            self.image_path.set(self._display_path(path))
-            self._load_preview(Path(path))
+        if not path:
+            return
+        candidate = Path(path)
+        if self.preview_source_path == candidate.resolve():
+            return
+        try:
+            image = self._read_preview(candidate)
+        except (OSError, ValueError, Image.DecompressionBombError) as exc:
+            messagebox.showerror("Could not load image", str(exc), parent=self)
+            return
+        if not self._confirm_save_before("loading another image"):
+            image.close()
+            return
+        if not self._reset_project_state():
+            image.close()
+            return
+        self.image_path.set(self._display_path(candidate))
+        self._show_preview(candidate, image)
+        self._set_status_message("Image loaded. Choose a profile to begin.")
 
     def _browse_profile(self) -> None:
+        if self._block_while_running("changing the extraction profile"):
+            return
         path = filedialog.askopenfilename(
             initialdir=self._profiles_dir(),
             filetypes=[("YAML", "*.yml *.yaml"), ("All files", "*.*")],
         )
         if path:
+            profile = self._read_selected_profile(Path(path))
+            if profile is None:
+                return
             if not self._confirm_save_before("changing the extraction profile"):
+                return
+            if not self._end_project_recovery():
                 return
             self.profile_path.set(self._display_path(path))
             self._active_profile_path = self.profile_path.get()
-            profile = load_profile(path)
             self._apply_profile_settings(profile)
             self.result = None
             self.feedback_records = []
@@ -673,11 +759,15 @@ class ReviewWorkbench(tk.Tk):
             return
         selected_profile = self.profile_path.get().strip()
         if not selected_profile:
-            messagebox.showerror("Missing profile", "Select a profile before running extraction.", parent=self)
+            messagebox.showerror(
+                "Missing profile", "Select a profile before running extraction.", parent=self
+            )
             return
         profile_file = Path(selected_profile)
         if not profile_file.is_file():
-            messagebox.showerror("Invalid profile", f"Profile not found: {profile_file}", parent=self)
+            messagebox.showerror(
+                "Invalid profile", f"Profile not found: {profile_file}", parent=self
+            )
             return
         active_key, _ = self._resolve_api_key_source()
         if not self.dry_run.get() and active_key is None:
@@ -724,10 +814,12 @@ class ReviewWorkbench(tk.Tk):
                     return
         try:
             max_output_tokens = self.max_output_tokens.get()
+            if self.use_max_output_tokens_limit.get() and max_output_tokens <= 0:
+                raise ValueError("Token allowance must be positive")
         except (tk.TclError, ValueError):
             messagebox.showerror(
                 "Invalid max output tokens",
-                "Max output tokens must be an integer.",
+                "Max output tokens must be a positive integer.",
                 parent=self,
             )
             return
@@ -747,8 +839,12 @@ class ReviewWorkbench(tk.Tk):
             "dry_run": self.dry_run.get(),
             "force_rerun": self.force_rerun.get(),
             "segmented_mode": self.segmented_mode.get(),
+            "recoverable": True,
         }
 
+        self._cancel_event = threading.Event()
+        self._continuing_extraction = False
+        job_kwargs["cancel_event"] = self._cancel_event
         self._worker_result = None
         self._worker_error = None
         self._start_progress_dialog(self.dry_run.get())
@@ -766,7 +862,15 @@ class ReviewWorkbench(tk.Tk):
 
     def _run_extraction_worker(self, **job_kwargs: Any) -> None:
         try:
-            self._worker_result = run_extraction_job(**job_kwargs)
+            continue_run_dir = job_kwargs.pop("continue_run_dir", None)
+            if continue_run_dir is not None:
+                from geo_map_exp_extractor.extraction_session import continue_extraction_job
+
+                self._worker_result = continue_extraction_job(
+                    run_dir=continue_run_dir, **job_kwargs
+                )
+            else:
+                self._worker_result = run_extraction_job(**job_kwargs)
         except Exception as exc:  # noqa: BLE001 - hand back to UI thread for display.
             self._worker_error = exc
 
@@ -782,12 +886,14 @@ class ReviewWorkbench(tk.Tk):
         self._run_thread = None
 
         if self._worker_error is not None:
+            self._close_when_stopped = False
             exc = self._worker_error
             self._worker_error = None
             self._set_status_message(f"Extraction failed: {exc}")
             messagebox.showerror("Extraction failed", str(exc), parent=self)
             return
         if self._worker_result is None:
+            self._close_when_stopped = False
             self._set_status_message("Extraction failed: unknown worker error")
             messagebox.showerror(
                 "Extraction failed",
@@ -795,9 +901,27 @@ class ReviewWorkbench(tk.Tk):
                 parent=self,
             )
             return
-        self._apply_extraction_result(self._worker_result)
+        if self._continuing_extraction:
+            self._load_project(project_dir=self._worker_result.run_dir)
+            if self.result is not None and self.result.run_dir == self._worker_result.run_dir:
+                if not self._close_when_stopped:
+                    if self.result.manifest.get("continuation_available"):
+                        self._offer_continuation()
+                    elif self.result.warnings:
+                        messagebox.showwarning(
+                            "Review continued extraction",
+                            "\n\n".join(self.result.warnings),
+                            parent=self,
+                        )
+        else:
+            self._apply_extraction_result(self._worker_result)
+        if self._close_when_stopped:
+            self._close_when_stopped = False
+            self._on_close()
 
     def _apply_extraction_result(self, result: ExtractionJobResult) -> None:
+        if not self._end_project_recovery():
+            return
         self.result = result
         self.rows = [dict(row) for row in self.result.rows]
         self.original_rows = [dict(row) for row in self.result.rows]
@@ -822,7 +946,9 @@ class ReviewWorkbench(tk.Tk):
         usage = self.result.usage
         summary_bits = [
             f"run: {self.result.run_id}",
-            "dry-run" if self.result.dry_run else ("cache reuse" if self.result.cache_reused else "fresh API call"),
+            "dry-run"
+            if self.result.dry_run
+            else ("cache reuse" if self.result.cache_reused else "fresh API call"),
             f"rough image tokens: {self.result.rough_image_tokens}",
         ]
         if not self.result.dry_run:
@@ -839,30 +965,43 @@ class ReviewWorkbench(tk.Tk):
             if self.result.warnings:
                 summary_bits.append("warnings present")
         self._set_status_message(" | ".join(summary_bits))
-        if self.result.warnings:
-            messagebox.showwarning("Extraction warning", "\n\n".join(self.result.warnings), parent=self)
+        self._start_project_recovery()
+        if self._close_when_stopped:
+            return
+        if self.result.manifest.get("continuation_available"):
+            self._offer_continuation()
+        elif self.result.warnings:
+            messagebox.showwarning(
+                "Extraction warning", "\n\n".join(self.result.warnings), parent=self
+            )
 
     def _start_progress_dialog(self, is_dry_run: bool) -> None:
         self._close_progress_dialog()
         dialog = tk.Toplevel(self)
         dialog.title("Running extraction")
-        dialog.geometry("460x160")
-        dialog.minsize(420, 150)
+        dialog.geometry("460x200")
+        dialog.minsize(420, 190)
         dialog.transient(self)
         dialog.grab_set()
-        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+        dialog.protocol("WM_DELETE_WINDOW", self._cancel_extraction)
 
         frame = ttk.Frame(dialog, padding=12)
         frame.pack(fill=tk.BOTH, expand=True)
         ttk.Label(
             frame,
-            text="Preparing dry run..." if is_dry_run else "Calling OpenAI API and validating output...",
+            text="Preparing dry run..."
+            if is_dry_run
+            else "Calling OpenAI API and validating output...",
             anchor="w",
         ).pack(fill=tk.X)
         progress = ttk.Progressbar(frame, mode="indeterminate")
         progress.pack(fill=tk.X, pady=(10, 8))
         progress.start(14)
         ttk.Label(frame, textvariable=self._progress_elapsed, anchor="w").pack(fill=tk.X)
+        if not is_dry_run:
+            ttk.Button(
+                frame, text="Cancel and keep progress", command=self._cancel_extraction
+            ).pack(pady=8)
 
         self._progress_dialog = dialog
         self._progress_started_at = datetime.now()
@@ -870,6 +1009,8 @@ class ReviewWorkbench(tk.Tk):
         self._center_window(dialog)
 
     def _update_progress_elapsed(self) -> None:
+        if self._cancel_event.is_set():
+            return
         if self._progress_dialog is None or self._progress_started_at is None:
             return
         seconds = int((datetime.now() - self._progress_started_at).total_seconds())
@@ -888,8 +1029,21 @@ class ReviewWorkbench(tk.Tk):
         self._progress_dialog = None
         self._progress_started_at = None
 
+    @staticmethod
+    def _read_preview(path: Path) -> Image.Image:
+        """Fully decode before replacing project state; release the source file."""
+
+        with Image.open(path) as image:
+            image.load()
+            return image.copy()
+
     def _load_preview(self, path: Path) -> None:
-        self.source_image = Image.open(path)
+        self._show_preview(path, self._read_preview(path))
+
+    def _show_preview(self, path: Path, image: Image.Image) -> None:
+        if self.source_image is not None:
+            self.source_image.close()
+        self.source_image = image
         self.preview_source_path = path.resolve()
         self.canvas.configure(cursor="hand2")
         self._zoom_extents()
@@ -1076,7 +1230,9 @@ class ReviewWorkbench(tk.Tk):
         current_width = getattr(getattr(self.sheet, "RI", None), "current_width", None)
         if isinstance(current_width, (int, float)):
             return max(0, int(round(current_width)))
-        configured_width = getattr(getattr(self.sheet, "ops", None), "default_row_index_width", None)
+        configured_width = getattr(
+            getattr(self.sheet, "ops", None), "default_row_index_width", None
+        )
         if isinstance(configured_width, (int, float)):
             return max(0, int(round(configured_width)))
         return 30
@@ -1279,12 +1435,13 @@ class ReviewWorkbench(tk.Tk):
             return []
         new_status = self._status_code_from_label(self.row_status_var.get())
         new_comment = self.row_comment_var.get().strip()
-        if self.row_statuses[row_index] == new_status and self.row_comments[row_index] == new_comment:
+        if (
+            self.row_statuses[row_index] == new_status
+            and self.row_comments[row_index] == new_comment
+        ):
             return []
         targets = [
-            index
-            for index in self._row_metadata_target_indexes
-            if 0 <= index < len(self.rows)
+            index for index in self._row_metadata_target_indexes if 0 <= index < len(self.rows)
         ]
         return targets or [row_index]
 
@@ -1336,6 +1493,8 @@ class ReviewWorkbench(tk.Tk):
             return False
         if decision:
             self._apply_row_metadata_to_indexes(pending_indexes)
+        else:
+            self._sync_row_metadata_controls()
         return True
 
     def _auto_apply_row_metadata_on_focus_out(self, _: tk.Event[Any]) -> None:
@@ -1438,7 +1597,9 @@ class ReviewWorkbench(tk.Tk):
             for column_index, field in enumerate(self.table_fields):
                 if column_index >= len(row_values):
                     continue
-                new_value = "" if row_values[column_index] is None else str(row_values[column_index])
+                new_value = (
+                    "" if row_values[column_index] is None else str(row_values[column_index])
+                )
                 if new_value != str(self.rows[row_index].get(field, "")):
                     self.rows[row_index][field] = new_value
                     changed = True
@@ -1446,7 +1607,9 @@ class ReviewWorkbench(tk.Tk):
         if changed:
             for row_index in changed_rows:
                 try:
-                    self.sheet.row_height(row_index, height="text", only_set_if_too_small=False, redraw=False)
+                    self.sheet.row_height(
+                        row_index, height="text", only_set_if_too_small=False, redraw=False
+                    )
                 except Exception:
                     pass
             self.sheet.refresh()
@@ -1499,6 +1662,13 @@ class ReviewWorkbench(tk.Tk):
         editor.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8, 4))
         editor.insert("1.0", str(original))
         editor.focus_set()
+        self._recovery_cell_editor = (int(row_id), field, editor)
+
+        def clear_recovery_editor(event: tk.Event[Any]) -> None:
+            if event.widget is editor:
+                self._recovery_cell_editor = None
+
+        editor.bind("<Destroy>", clear_recovery_editor)
 
         controls = ttk.Frame(dialog)
         controls.grid(row=1, column=0, sticky="e", padx=8, pady=(0, 8))
@@ -1520,7 +1690,9 @@ class ReviewWorkbench(tk.Tk):
                     model_value=model_value,
                     corrected_value=corrected,
                     status=status,
-                    comment=self.row_comments[row_index] if row_index < len(self.row_comments) else "",
+                    comment=self.row_comments[row_index]
+                    if row_index < len(self.row_comments)
+                    else "",
                     event_type="cell_edit",
                 )
                 self._set_status_message(f"Edited row {row_index + 1}, field {field}.")
@@ -1866,18 +2038,79 @@ class ReviewWorkbench(tk.Tk):
         help_window.bind("<Escape>", lambda _event: help_window.destroy())
         self._center_window(help_window)
 
-    def _load_project(self) -> None:
-        initial_dir = self.result.run_dir if self.result is not None else Path(self.output_dir.get())
-        selected = filedialog.askdirectory(initialdir=str(initial_dir))
+    def _load_project(
+        self,
+        *,
+        project_dir: Path | None = None,
+        recovery_record: RecoveryRecord | None = None,
+    ) -> None:
+        if self._block_while_running("loading another project"):
+            return
+        initial_dir = (
+            self.result.run_dir if self.result is not None else Path(self.output_dir.get())
+        )
+        selected = (
+            str(project_dir)
+            if project_dir is not None
+            else filedialog.askdirectory(
+                initialdir=str(initial_dir),
+            )
+        )
         if not selected:
             return
         if not self._confirm_save_before("loading another project"):
             return
+        if recovery_record is None:
+            proceed, recovery_record = self._choose_recovery(Path(selected))
+            if not proceed:
+                return
         try:
-            loaded_project = load_review_project(selected)
+            loaded_project = (
+                load_review_project(selected, prefer_extracted=True)
+                if recovery_record is not None
+                else load_review_project(selected)
+            )
         except ProjectLoadError as exc:
             messagebox.showerror("Could not load project", str(exc), parent=self)
             return
+
+        if recovery_record is not None:
+            snapshot = recovery_record.snapshot
+            if (
+                snapshot.run_id
+                != str(loaded_project.manifest.get("run_id", loaded_project.run_dir.name))
+                or snapshot.state.fields != loaded_project.fields
+                or snapshot.request_fingerprint
+                != str(loaded_project.manifest.get("request_fingerprint", ""))
+            ):
+                messagebox.showerror(
+                    "Recovery does not match project",
+                    "The project identity or fields have changed. The recovery copy was kept.",
+                    parent=self,
+                )
+                return
+            try:
+                revision = project_revision(loaded_project.output_paths)
+            except OSError as exc:
+                messagebox.showerror("Could not verify recovery copy", str(exc), parent=self)
+                return
+            if snapshot.base_revision != revision:
+                if not messagebox.askyesno(
+                    "Saved project has changed",
+                    "The saved project differs from the version behind this recovery copy.\n\n"
+                    "Restore the recovery copy for review anyway? It will not overwrite saved files.",
+                    parent=self,
+                ):
+                    return
+
+        source_image_path = loaded_project.source_image_path
+        preview = None
+        if source_image_path is not None:
+            try:
+                preview = self._read_preview(source_image_path)
+            except (OSError, ValueError, Image.DecompressionBombError) as exc:
+                messagebox.showerror("Could not load project image", str(exc), parent=self)
+                return
 
         run_dir = loaded_project.run_dir
         manifest = loaded_project.manifest
@@ -1903,10 +2136,18 @@ class ReviewWorkbench(tk.Tk):
                 comments[row_index] = comment
 
         usage = {
-            "input_tokens": manifest.get("input_tokens") if isinstance(manifest.get("input_tokens"), int) else None,
-            "output_tokens": manifest.get("output_tokens") if isinstance(manifest.get("output_tokens"), int) else None,
-            "total_tokens": manifest.get("total_tokens") if isinstance(manifest.get("total_tokens"), int) else None,
-            "cached_tokens": manifest.get("cached_tokens") if isinstance(manifest.get("cached_tokens"), int) else None,
+            "input_tokens": manifest.get("input_tokens")
+            if isinstance(manifest.get("input_tokens"), int)
+            else None,
+            "output_tokens": manifest.get("output_tokens")
+            if isinstance(manifest.get("output_tokens"), int)
+            else None,
+            "total_tokens": manifest.get("total_tokens")
+            if isinstance(manifest.get("total_tokens"), int)
+            else None,
+            "cached_tokens": manifest.get("cached_tokens")
+            if isinstance(manifest.get("cached_tokens"), int)
+            else None,
             "reasoning_tokens": manifest.get("reasoning_tokens")
             if isinstance(manifest.get("reasoning_tokens"), int)
             else None,
@@ -1931,6 +2172,11 @@ class ReviewWorkbench(tk.Tk):
             warnings=[str(item) for item in manifest.get("warnings", []) if isinstance(item, str)],
         )
 
+        if not self._end_project_recovery():
+            if preview is not None:
+                preview.close()
+            return
+        self._clear_preview()
         self.result = result
         self.rows = normalized_rows
         self.original_rows = original_rows
@@ -1942,17 +2188,16 @@ class ReviewWorkbench(tk.Tk):
         self._manual_column_resize = False
         self.has_unsaved_changes = False
 
+        self.profile_path.set("")
+        self._active_profile_path = ""
         profile_id = str(manifest.get("profile_id", "")).strip()
         if profile_id:
-            self.profile_path.set(
-                self._display_path(self._profiles_dir() / f"{profile_id}.yml")
-            )
+            self.profile_path.set(self._display_path(self._profiles_dir() / f"{profile_id}.yml"))
             self._active_profile_path = self.profile_path.get()
 
-        source_image_path = loaded_project.source_image_path
-        if source_image_path is not None:
+        if source_image_path is not None and preview is not None:
             self.image_path.set(self._display_path(source_image_path))
-            self._load_preview(source_image_path)
+            self._show_preview(source_image_path, preview)
 
         self._configure_table(result.fields, self.rows)
         self._sync_row_metadata_controls()
@@ -1961,11 +2206,33 @@ class ReviewWorkbench(tk.Tk):
             self.notes.insert("1.0", loaded_project.notes_text)
         self.notes.edit_modified(False)
         self.has_unsaved_changes = False
-        self._set_status_message(f"Project loaded: {result.run_id}")
+        summary = f"Project loaded: {result.run_id}"
+        if "extraction_status" in manifest:
+            summary += (
+                f" | {manifest['extraction_status']}"
+                f" | cumulative tokens: {usage.get('total_tokens')}"
+                f" | estimated cost USD: {result.estimated_cost_usd}"
+            )
+        self._set_status_message(summary)
+        self._start_project_recovery()
+        if recovery_record is not None:
+            self._apply_recovery(recovery_record)
 
     def _confirm_save_before(self, action: str) -> bool:
         """Offer to save reviewed changes before a destructive project action."""
 
+        # An open cell editor or a queued notes event may not have marked the
+        # project dirty yet. Commit those edits before deciding whether to ask.
+        if self.result is not None:
+            try:
+                if self._use_tksheet and self.sheet is not None:
+                    self.sheet.close_text_editor()
+                    self._on_sheet_end_paste(None)
+                if self.notes.edit_modified():
+                    self._on_notes_modified(None)
+            except Exception as exc:  # noqa: BLE001 - never discard an uncommitted edit.
+                messagebox.showerror("Could not finish editing", str(exc), parent=self)
+                return False
         if not self._resolve_pending_row_metadata_change():
             return False
         if self.result is None or not self.has_unsaved_changes:
@@ -1992,9 +2259,11 @@ class ReviewWorkbench(tk.Tk):
             return not self.has_unsaved_changes
         return True
 
-    def _reset_project_state(self) -> None:
+    def _reset_project_state(self) -> bool:
         """Return to a clean demo-ready state without clearing the API key."""
 
+        if not self._end_project_recovery():
+            return False
         self.result = None
         self.rows = []
         self.original_rows = []
@@ -2002,6 +2271,7 @@ class ReviewWorkbench(tk.Tk):
         self.row_statuses = []
         self.row_comments = []
         self.selected_row_index = None
+        self._row_metadata_target_indexes = []
         self.table_fields = []
         self.column_widths_by_field = {}
         self._manual_column_resize = False
@@ -2021,16 +2291,7 @@ class ReviewWorkbench(tk.Tk):
         self.force_rerun.set(False)
         self.segmented_mode.set(False)
 
-        if self.source_image is not None:
-            self.source_image.close()
-        self.source_image = None
-        self.preview_photo = None
-        self.preview_source_path = None
-        self.zoom = 1.0
-        self.canvas.delete("all")
-        self.canvas.configure(scrollregion=(0, 0, 0, 0), cursor="")
-        self.canvas.xview_moveto(0.0)
-        self.canvas.yview_moveto(0.0)
+        self._clear_preview()
 
         self._configure_table([], [])
         self.row_status_var.set(self.row_status_labels["needs_review"])
@@ -2039,14 +2300,38 @@ class ReviewWorkbench(tk.Tk):
         self.notes.delete("1.0", tk.END)
         self.notes.edit_modified(False)
         self._set_status_message("Project cleared. Choose an image and profile to begin.")
+        return True
 
-    def _clear_project(self) -> None:
+    def _clear_preview(self) -> None:
+        """Release the old image and reset all preview navigation state."""
+
+        self.image_path.set("")
+        if self.source_image is not None:
+            self.source_image.close()
+        self.source_image = None
+        self.preview_photo = None
+        self.preview_source_path = None
+        self.zoom = 1.0
+        self._is_panning = False
+        self.canvas.delete("all")
+        self.canvas.configure(scrollregion=(0, 0, 0, 0), cursor="")
+        self.canvas.xview_moveto(0.0)
+        self.canvas.yview_moveto(0.0)
+
+    def _block_while_running(self, action: str) -> bool:
+        """Prevent an in-flight result from arriving in a different project."""
+
         if self._run_thread is not None and self._run_thread.is_alive():
             messagebox.showinfo(
                 "Extraction in progress",
-                "Wait for the current extraction to finish before clearing the project.",
+                f"Wait for the current extraction to finish before {action}.",
                 parent=self,
             )
+            return True
+        return False
+
+    def _clear_project(self) -> None:
+        if self._block_while_running("clearing the project"):
             return
         if not self._confirm_save_before("clearing the project"):
             return
@@ -2057,28 +2342,40 @@ class ReviewWorkbench(tk.Tk):
             close_running = messagebox.askyesno(
                 "Extraction in progress",
                 (
-                    "An extraction is still running. Closing now may interrupt the request and "
-                    "leave the run incomplete.\n\nClose anyway?"
+                    "An extraction is still running. Cancel the request and close after "
+                    "available progress has been saved?"
                 ),
                 parent=self,
             )
             if not close_running:
                 return
+            self._close_when_stopped = True
+            self._cancel_extraction()
+            return
         if not self._confirm_save_before("exiting"):
             return
+        if not self._end_project_recovery():
+            return
+        self._shutdown_recovery()
         self.destroy()
 
     def _save_corrected(self) -> bool:
+        try:
+            return self._save_corrected_impl()
+        except Exception as exc:  # noqa: BLE001 - retain dirty state and the recovery copy.
+            self.has_unsaved_changes = True
+            messagebox.showerror("Save failed", str(exc), parent=self)
+            self._set_status_message(f"Save failed: {exc}")
+            return False
+
+    def _save_corrected_impl(self) -> bool:
         if self.result is None:
             messagebox.showinfo("No run", "Run extraction before saving corrections.", parent=self)
             return False
         if not self._resolve_pending_row_metadata_change():
             return False
         if self._use_tksheet and self.sheet is not None:
-            try:
-                self.sheet.close_text_editor()
-            except Exception:
-                pass
+            self.sheet.close_text_editor()
             sheet_data = self.sheet.get_sheet_data()
             for row_index, row_values in enumerate(sheet_data):
                 if row_index >= len(self.rows):
@@ -2086,10 +2383,14 @@ class ReviewWorkbench(tk.Tk):
                 for column_index, field in enumerate(self.result.fields):
                     if column_index >= len(row_values):
                         continue
-                    self.rows[row_index][field] = "" if row_values[column_index] is None else str(
-                        row_values[column_index]
+                    self.rows[row_index][field] = (
+                        "" if row_values[column_index] is None else str(row_values[column_index])
                     )
         notes_text = self.notes.get("1.0", tk.END).rstrip() + "\n"
+        try:
+            self._checkpoint_before_save()
+        except Exception as exc:  # noqa: BLE001 - recovery failure must not prevent explicit saving.
+            self.recovery_status.set(f"Recovery checkpoint failed; attempting explicit save: {exc}")
         Path(self.result.output_paths["notes"]).write_text(notes_text, encoding="utf-8")
         note_body = notes_text.strip()
         records = list(self.feedback_records)
@@ -2137,15 +2438,29 @@ class ReviewWorkbench(tk.Tk):
             fields=self.result.fields,
             csv_path=self.result.output_paths["corrected_csv"],
             json_path=self.result.output_paths["corrected_json"],
+            extraction_status=self.result.manifest.get("extraction_status"),
         )
         write_feedback_jsonl(records, self.result.output_paths["feedback"])
+        if not self._end_project_recovery():
+            return False
         self._mark_saved()
+        self._start_project_recovery()
         self._set_status_message(f"Saved project in {self.result.run_dir}")
         return True
 
     def _promote_corrected(self) -> None:
         if self.result is None:
-            messagebox.showinfo("No run", "Run extraction before promoting corrected outputs.", parent=self)
+            messagebox.showinfo(
+                "No run", "Run extraction before promoting corrected outputs.", parent=self
+            )
+            return
+        if self.result.manifest.get("continuation_available"):
+            messagebox.showinfo(
+                "Incomplete extraction",
+                "Complete and review the extraction before promoting it. "
+                "Partial results can still be saved and exported.",
+                parent=self,
+            )
             return
         corrected_csv = self.result.output_paths["corrected_csv"]
         corrected_json = self.result.output_paths["corrected_json"]

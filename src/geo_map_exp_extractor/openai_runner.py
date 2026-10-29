@@ -6,7 +6,9 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
@@ -48,6 +50,7 @@ class ExtractionResult:
     usage: UsageSummary | None = None
     incomplete_max_output_tokens: bool = False
     token_limit_warning: str | None = None
+    interruption_reason: str | None = None
 
 
 class ExtractionValidationError(RuntimeError):
@@ -86,6 +89,11 @@ def validate_extraction_data(profile: ExtractionProfile, data: dict[str, Any]) -
     if validated["fields"] != profile.fields:
         msg = "model output fields do not exactly match the profile field order"
         raise ValueError(msg)
+    for index, row in enumerate(validated["rows"], start=1):
+        for field, rule in profile.field_rules.items():
+            allowed = rule.allowed_values
+            if allowed is not None and row[field] not in allowed:
+                raise ValueError(f"row {index}: {field} is outside its controlled vocabulary")
     return validated
 
 
@@ -160,7 +168,9 @@ def _validate_request_options(model: str, reasoning_effort: str, service_tier: s
         return
     if reasoning_effort not in options.reasoning_efforts:
         supported = ", ".join(options.reasoning_efforts)
-        raise ValueError(f"{model} supports reasoning effort: {supported}; not {reasoning_effort!r}.")
+        raise ValueError(
+            f"{model} supports reasoning effort: {supported}; not {reasoning_effort!r}."
+        )
     if service_tier not in options.service_tiers:
         supported = ", ".join(options.service_tiers)
         raise ValueError(f"{model} supports service tier: {supported}; not {service_tier!r}.")
@@ -182,9 +192,11 @@ def _build_openai_client(api_key: str) -> Any:
     try:
         from openai import OpenAI  # Local import keeps non-API code paths importable.
     except ImportError as exc:  # pragma: no cover - depends on environment package set.
-        msg = "OpenAI SDK is required to run extraction, but it is not available in this environment."
+        msg = (
+            "OpenAI SDK is required to run extraction, but it is not available in this environment."
+        )
         raise RuntimeError(msg) from exc
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key, max_retries=0, timeout=60.0)
 
 
 def _resolve_api_key(explicit_api_key: str | None) -> str | None:
@@ -228,6 +240,11 @@ def run_extraction(
     retries: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     schema: dict[str, Any] | None = None,
+    background: bool = False,
+    cancel_event: Event | None = None,
+    on_response: Callable[[dict[str, Any]], None] | None = None,
+    response_id: str | None = None,
+    resume_after: int | None = None,
 ) -> ExtractionResult:
     """Send an image and prompt to the OpenAI Responses API and validate the output."""
 
@@ -241,7 +258,8 @@ def run_extraction(
         raise RuntimeError(msg)
 
     client = _build_openai_client(resolved_api_key)
-    attempts = max(1, retries)
+    # Do not blindly repeat a background create after an ambiguous network error.
+    attempts = 1 if background else max(1, retries)
     response: Any | None = None
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
@@ -269,7 +287,19 @@ def run_extraction(
             if _supports_reasoning_config(model):
                 request_payload["reasoning"] = {"effort": reasoning_effort}
 
-            response = client.responses.create(**request_payload)
+            if background:
+                request_payload.update(background=True, store=True)
+            if cancel_event is not None and cancel_event.is_set() and not response_id:
+                return ExtractionResult(
+                    data={"fields": profile.fields, "rows": [], "notes": [], "warnings": []},
+                    raw_response={"status": "cancelled"},
+                    interruption_reason="cancelled",
+                )
+            response = (
+                client.responses.retrieve(response_id)
+                if response_id
+                else client.responses.create(**request_payload)
+            )
             break
         except Exception as exc:  # noqa: BLE001
             last_error = exc
@@ -280,9 +310,29 @@ def run_extraction(
     if response is None:
         if last_error is None:
             raise RuntimeError("OpenAI request failed without a captured exception.")
-        raise RuntimeError(f"OpenAI request failed after {attempts} attempt(s): {last_error}") from last_error
+        raise RuntimeError(
+            f"OpenAI request failed after {attempt} attempt(s): {last_error}"
+        ) from last_error
 
     raw = response_to_dict(response)
+    if on_response is not None:
+        on_response(raw)
+    cancellation_sent = False
+    while background and raw.get("status") in {"queued", "in_progress"}:
+        if cancel_event is not None and cancel_event.is_set() and not cancellation_sent:
+            response = client.responses.cancel(raw["id"])
+            cancellation_sent = True
+        else:
+            if cancel_event is not None and not cancel_event.is_set():
+                cancel_event.wait(1.0)
+            else:
+                time.sleep(1.0)
+            if cancel_event is not None and cancel_event.is_set() and not cancellation_sent:
+                continue
+            response = client.responses.retrieve(raw["id"])
+        raw = response_to_dict(response)
+        if on_response is not None:
+            on_response(raw)
     incomplete_for_budget = _is_incomplete_for_max_output_tokens(raw)
     token_limit_warning: str | None = None
     if incomplete_for_budget:
@@ -290,18 +340,40 @@ def run_extraction(
             "Response status is incomplete because max_output_tokens was reached. "
             "The model may have run out of token budget during reasoning or final output."
         )
+    reason = "max_output_tokens" if incomplete_for_budget else None
+    if raw.get("status") in {"cancelled", "failed", "incomplete"}:
+        details = raw.get("incomplete_details") or {}
+        reason = reason or details.get("reason") or raw["status"]
     try:
         parsed = parse_response_json(response)
+        if resume_after is not None and parsed.pop("resume_after", None) != resume_after:
+            raise ValueError("Continuation did not confirm the saved row boundary")
         data = validate_extraction_data(profile, parsed)
     except (ValueError, ValidationError) as exc:
         message = f"Structured output validation failed: {exc}"
         if token_limit_warning:
             message = f"{message}. {token_limit_warning}"
-        raise ExtractionValidationError(message, raw) from exc
+        if not reason or not background:
+            raise ExtractionValidationError(message, raw) from exc
+        from geo_map_exp_extractor.partial_output import recover_complete_rows, response_text
+
+        text = getattr(response, "output_text", None) or response_text(raw)
+        data = recover_complete_rows(profile, text)
+        if resume_after is not None:
+            # The continuation envelope places this confirmation before fields/rows.
+            import re
+
+            match = re.match(r'\s*\{\s*"resume_after"\s*:\s*(\d+)\s*,', text)
+            if match is None or int(match.group(1)) != resume_after:
+                data["rows"] = []
+                data["warnings"].append("Could not validate the continuation row boundary.")
+    if reason and raw.get("error"):
+        data["warnings"].append(f"API response error: {raw['error']}")
     return ExtractionResult(
         data=data,
         raw_response=raw,
         usage=_extract_usage(raw),
         incomplete_max_output_tokens=incomplete_for_budget,
         token_limit_warning=token_limit_warning,
+        interruption_reason=reason,
     )
