@@ -22,6 +22,9 @@ normalize_hyphenated_line_breaks: true
 
 special_instructions:
   - Interpret the visual grouping of the stratigraphic column to determine which text belongs to each map unit.
+  - Trace age and lithostratigraphic brackets on either side of the column; inherit shared values only where the bracket scope is unambiguous, and record the inheritance in notes.
   - FullName should include the group name when visually indicated.
+  - Keep named coal beds as subordinate rows immediately beneath their containing formation; transcribe their thickness and units without inventing map-unit symbols or descriptions.
+  - Distinguish headings from unit names and keep standalone headnotes in Description. Preserve separate units with identical names.
   - Literally transcribe descriptive text. Unreadable text should be indicated.
   - Leave fields blank when they do not apply or are not visible.

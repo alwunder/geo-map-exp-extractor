@@ -9,11 +9,17 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
+from threading import Event
 from typing import Any
 
 from geo_map_exp_extractor import __version__
 from geo_map_exp_extractor.config import load_profile
-from geo_map_exp_extractor.exporters import write_csv, write_json, write_prompt
+from geo_map_exp_extractor.exporters import (
+    write_csv,
+    write_json,
+    write_profile_snapshot,
+    write_prompt,
+)
 from geo_map_exp_extractor.image_io import (
     PreparedImage,
     create_image_segments,
@@ -170,6 +176,8 @@ def _save_cache_payload(
     *,
     extraction: ExtractionResult,
 ) -> None:
+    if extraction.incomplete_max_output_tokens or extraction.interruption_reason:
+        return
     payload = {
         "raw_response": extraction.raw_response,
         "data": extraction.data,
@@ -179,7 +187,9 @@ def _save_cache_payload(
     }
     cache_file = _cache_file_path(request_hash)
     cache_file.parent.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    cache_file.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def _load_cache_payload(request_hash: str) -> dict[str, Any] | None:
@@ -188,6 +198,8 @@ def _load_cache_payload(request_hash: str) -> dict[str, Any] | None:
         return None
     loaded = json.loads(cache_file.read_text(encoding="utf-8"))
     if not isinstance(loaded, dict):
+        return None
+    if loaded.get("incomplete_max_output_tokens"):
         return None
     return loaded
 
@@ -297,7 +309,9 @@ def _resolve_manifest_output_paths(
             )
         )
         local_candidates.append(default_path.resolve())
-        resolved[key] = next((path for path in local_candidates if path.exists()), local_candidates[0])
+        resolved[key] = next(
+            (path for path in local_candidates if path.exists()), local_candidates[0]
+        )
 
     return resolved
 
@@ -331,7 +345,9 @@ def _resolve_manifest_image_path(
                 except ValueError:
                     pass
                 else:
-                    candidates.append(_safe_project_path(run_dir, relative_path, label=manifest_key))
+                    candidates.append(
+                        _safe_project_path(run_dir, relative_path, label=manifest_key)
+                    )
             candidates.append(
                 _safe_project_path(
                     run_dir,
@@ -371,12 +387,22 @@ def _read_project_json(path: Path, *, description: str) -> dict[str, Any]:
     return loaded
 
 
-def load_review_project(run_dir: str | Path) -> LoadedReviewProject:
+def load_review_project(
+    run_dir: str | Path,
+    *,
+    prefer_extracted: bool = False,
+) -> LoadedReviewProject:
     """Load a review project with the selected run folder as its authority boundary."""
 
     selected_dir = Path(run_dir).resolve()
     if not selected_dir.is_dir():
         raise ProjectLoadError(f"Selected project folder does not exist: {selected_dir}")
+    from geo_map_exp_extractor.extraction_session import repair_session_exports
+
+    try:
+        repair_session_exports(selected_dir)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise ProjectLoadError(f"Could not read extraction checkpoint: {exc}") from exc
 
     manifest_path = selected_dir / "manifest.json"
     if not manifest_path.is_file():
@@ -410,7 +436,13 @@ def load_review_project(run_dir: str | Path) -> LoadedReviewProject:
 
     corrected_json = output_paths["corrected_json"]
     extracted_json = output_paths["extracted_json"]
-    data_path = corrected_json if corrected_json.is_file() else extracted_json
+    data_path = (
+        extracted_json
+        if prefer_extracted and extracted_json.is_file()
+        else corrected_json
+        if corrected_json.is_file()
+        else extracted_json
+    )
     if not data_path.is_file():
         raise ProjectLoadError(
             "Selected project folder does not contain required corrected.json or extracted.json data."
@@ -435,9 +467,7 @@ def load_review_project(run_dir: str | Path) -> LoadedReviewProject:
             isinstance(row, dict) for row in extracted_rows
         ):
             raise ProjectLoadError("extracted.json field 'rows' must be a list of objects.")
-        original_rows = [
-            {field: row.get(field, "") for field in fields} for row in extracted_rows
-        ]
+        original_rows = [{field: row.get(field, "") for field in fields} for row in extracted_rows]
     if not original_rows:
         original_rows = [dict(row) for row in rows]
     if len(original_rows) < len(rows):
@@ -448,7 +478,7 @@ def load_review_project(run_dir: str | Path) -> LoadedReviewProject:
 
     feedback_records: list[dict[str, Any]] = []
     feedback_path = output_paths["feedback"]
-    if feedback_path.is_file():
+    if feedback_path.is_file() and not prefer_extracted:
         try:
             feedback_lines = feedback_path.read_text(encoding="utf-8").splitlines()
         except OSError as exc:
@@ -465,7 +495,7 @@ def load_review_project(run_dir: str | Path) -> LoadedReviewProject:
 
     notes_text = ""
     notes_path = output_paths["notes"]
-    if notes_path.is_file():
+    if notes_path.is_file() and not prefer_extracted:
         try:
             notes_text = notes_path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -517,10 +547,18 @@ def _usage_from_dict(payload: Any) -> UsageSummary | None:
     if not isinstance(payload, dict):
         return None
     return UsageSummary(
-        input_tokens=payload.get("input_tokens") if isinstance(payload.get("input_tokens"), int) else None,
-        output_tokens=payload.get("output_tokens") if isinstance(payload.get("output_tokens"), int) else None,
-        total_tokens=payload.get("total_tokens") if isinstance(payload.get("total_tokens"), int) else None,
-        cached_tokens=payload.get("cached_tokens") if isinstance(payload.get("cached_tokens"), int) else None,
+        input_tokens=payload.get("input_tokens")
+        if isinstance(payload.get("input_tokens"), int)
+        else None,
+        output_tokens=payload.get("output_tokens")
+        if isinstance(payload.get("output_tokens"), int)
+        else None,
+        total_tokens=payload.get("total_tokens")
+        if isinstance(payload.get("total_tokens"), int)
+        else None,
+        cached_tokens=payload.get("cached_tokens")
+        if isinstance(payload.get("cached_tokens"), int)
+        else None,
         reasoning_tokens=payload.get("reasoning_tokens")
         if isinstance(payload.get("reasoning_tokens"), int)
         else None,
@@ -614,12 +652,19 @@ def write_corrected_outputs(
     fields: list[str],
     csv_path: str | Path,
     json_path: str | Path,
+    extraction_status: str | None = None,
 ) -> None:
     """Write reviewer-corrected rows as CSV and structured JSON."""
 
     normalized_rows = [{field: row.get(field, "") for field in fields} for row in rows]
     write_csv(normalized_rows, fields, csv_path)
-    write_json({"fields": fields, "rows": normalized_rows}, json_path)
+    data: dict[str, Any] = {"fields": fields, "rows": normalized_rows}
+    if extraction_status is not None:
+        data["extraction_status"] = extraction_status
+        data["warnings"] = (
+            [] if extraction_status == "complete" else ["INCOMPLETE extraction: partial table."]
+        )
+    write_json(data, json_path)
 
 
 def write_feedback_jsonl(records: Sequence[dict[str, Any]], output_path: str | Path) -> Path:
@@ -714,6 +759,8 @@ def run_extraction_job(
     segment_overlap_px: int = 200,
     extraction_runner: ExtractionRunner = run_extraction,
     timestamp: datetime | None = None,
+    recoverable: bool = False,
+    cancel_event: Event | None = None,
 ) -> ExtractionJobResult:
     """Run extraction and create a timestamped review folder with all sidecar files."""
 
@@ -722,6 +769,12 @@ def run_extraction_job(
         msg = "Folder paths are not allowed for single-image extraction."
         raise ValueError(msg)
     profile_file = Path(profile_path)
+    profile = load_profile(profile_file)
+    if segmented_mode and not profile.allow_segmented_mode:
+        raise ValueError(
+            f"Profile {profile.id!r} requires whole-panel extraction; "
+            "segmented mode cannot reconcile its hierarchy across crops."
+        )
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
 
@@ -737,7 +790,8 @@ def run_extraction_job(
     paths = review_output_paths(run_dir)
     paths = _copy_inputs(image, profile_file, paths)
 
-    profile = load_profile(profile_file)
+    if any(rule.vocabulary is not None for rule in profile.field_rules.values()):
+        write_profile_snapshot(profile, paths["profile"])
     selected_model = model if model is not None else profile.model
     selected_reasoning_effort = (
         reasoning_effort if reasoning_effort is not None else profile.reasoning_effort
@@ -832,6 +886,71 @@ def run_extraction_job(
                 for segment in segments
             ]
 
+        if recoverable:
+            from geo_map_exp_extractor.extraction_session import ExtractionSession, run_session
+
+            manifest = build_review_manifest(
+                run_id=run_dir.name,
+                timestamp=timestamp_text,
+                prepared_image=prepared,
+                profile_id=profile.id,
+                profile_fields=profile.fields,
+                prompt_hash=prompt_hash,
+                schema_hash=schema_hash,
+                model=selected_model,
+                reasoning_effort=selected_reasoning_effort,
+                service_tier=selected_service_tier,
+                image_detail=selected_image_detail,
+                max_output_tokens=selected_max_output_tokens,
+                schema_version=SCHEMA_VERSION,
+                request_hash=request_hash,
+                api_call_mode="fresh_api_call",
+                usage={},
+                elapsed_seconds=0.0,
+                estimated_cost_usd=None,
+                segmented_mode=segmented_mode,
+                segment_settings={
+                    "segment_height_px": segment_height_px,
+                    "segment_overlap_px": segment_overlap_px,
+                }
+                if segmented_mode
+                else None,
+                segment_calls=[],
+                warnings=[],
+                output_paths=paths,
+            )
+            state = ExtractionSession(
+                manifest=manifest,
+                segments=[_portable_path(item[1], relative_to=run_dir) for item in segment_items],
+                use_cache=use_cache,
+                allow_cache_lookup=not force_rerun,
+                segment_fingerprints=[
+                    _request_fingerprint(
+                        processed_image_hash=item[2],
+                        profile_id=profile.id,
+                        profile_fields=profile.fields,
+                        prompt_hash=prompt_hash,
+                        model=selected_model,
+                        reasoning_effort=selected_reasoning_effort,
+                        service_tier=selected_service_tier,
+                        image_detail=selected_image_detail,
+                        max_output_tokens=selected_max_output_tokens,
+                        schema_version=(
+                            f"{SCHEMA_VERSION}|seg:{int(segmented_mode)}"
+                            f"|h:{segment_height_px}|o:{segment_overlap_px}"
+                        ),
+                    )
+                    for item in segment_items
+                ],
+            )
+            return run_session(
+                run_dir,
+                state,
+                api_key=api_key,
+                cancel_event=cancel_event,
+                extraction_runner=extraction_runner,
+            )
+
         all_rows: list[dict[str, Any]] = []
         segment_raw_payloads: list[dict[str, Any]] = []
         usage_totals = {
@@ -870,7 +989,9 @@ def run_extraction_job(
                     data=data if isinstance(data, dict) else {},
                     raw_response=raw_response if isinstance(raw_response, dict) else {},
                     usage=_usage_from_dict(cached_payload.get("usage")),
-                    incomplete_max_output_tokens=bool(cached_payload.get("incomplete_max_output_tokens")),
+                    incomplete_max_output_tokens=bool(
+                        cached_payload.get("incomplete_max_output_tokens")
+                    ),
                     token_limit_warning=(
                         cached_payload.get("token_limit_warning")
                         if isinstance(cached_payload.get("token_limit_warning"), str)
@@ -911,15 +1032,15 @@ def run_extraction_job(
                     "segment_index": index,
                     "segment_path": _portable_path(segment_path, relative_to=run_dir),
                     "request_fingerprint": segment_request_hash,
-                    "api_call_mode": "cache_reuse" if cached_payload is not None else "fresh_api_call",
+                    "api_call_mode": "cache_reuse"
+                    if cached_payload is not None
+                    else "fresh_api_call",
                     "usage": segment_usage,
                     "token_limit_warning": segment_extraction.token_limit_warning,
                 }
             )
             if segment_extraction.token_limit_warning:
-                run_warnings.append(
-                    f"Segment {index}: {segment_extraction.token_limit_warning}"
-                )
+                run_warnings.append(f"Segment {index}: {segment_extraction.token_limit_warning}")
 
         rows = all_rows
         extraction = ExtractionResult(

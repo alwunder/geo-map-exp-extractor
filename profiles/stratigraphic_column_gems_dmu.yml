@@ -1,0 +1,180 @@
+id: stratigraphic_column_gems_dmu
+name: Stratigraphic column to GeMS DMU (review required)
+task_label: stratigraphic column or description of map units for a GeMS DMU staging table
+model: gpt-6-astra
+reasoning_effort: medium
+image_detail: original
+max_output_tokens: 24000
+allow_segmented_mode: false
+
+# GeMS field order; Thickness is retained in Description, not discarded.
+fields:
+  - MapUnit
+  - Name
+  - FullName
+  - Age
+  - Description
+  - HierarchyKey
+  - ParagraphStyle
+  - Label
+  - Symbol
+  - AreaFillRGB
+  - AreaFillPatternDescription
+  - DescriptionSourceID
+  - GeoMaterial
+  - GeoMaterialConfidence
+  - DescriptionOfMapUnits_ID
+
+include_intro_footnotes: true
+preserve_wording: true
+normalize_line_breaks: true
+normalize_hyphenated_line_breaks: true
+
+field_rules:
+  MapUnit:
+    description: >-
+      Mapped unit identifier. Copy a readable ASCII identifier exactly. Leave blank
+      for headings, headnotes, and unmapped parents. Do not invent symbols for coal
+      beds or translate special glyphs into guessed ASCII codes; preserve their
+      visible form in Label and flag required identifier reconciliation.
+  Name:
+    description: >-
+      Short source unit name or heading, without hierarchy prefixes or appended age.
+      Headnotes have text in Description and no invented Name; flag standalone
+      headnotes with blank Name for reconciliation with the standard's non-null rule.
+  FullName:
+    description: >-
+      Unit name including explicitly indicated containing lithostratigraphic units,
+      e.g., Member of Formation of Group. Use natural full identification rather
+      than a semicolon list. Do not add age, province, or regional category headings
+      as containing formations. Use Name when no containing unit is shown. Blank
+      for headings/headnotes. Warn if complete identification is unresolved.
+  Age:
+    description: >-
+      Source age wording, preserving uncertainty and order. Inherit an explicitly
+      shared age from a containing unit or bracket when clearly applicable, and
+      note the inheritance. Never infer age from symbols or outside knowledge.
+      Blank for headings/headnotes; warn for units whose age cannot be established.
+  Description:
+    description: >-
+      Complete source description or headnote, preserving paragraph boundaries.
+      Include thickness, coal-bed measurements, contact notes, and their units.
+      Append separate thickness text exactly as its own paragraph and note this
+      assembly. Do not replace descriptions with lithology summaries.
+  HierarchyKey:
+    description: >-
+      Unique provisional DMU order/parentage key for every row. Use three-digit,
+      zero-padded positive integer segments separated by hyphens, e.g., 001,
+      001-001, 001-001-001. Siblings increment in source order; children append
+      one segment to an existing parent's key. Use one width throughout the table
+      (increase all segments if more than 999 siblings). Lexical sorting must
+      reproduce row order. These keys are unrelated to GeoMaterialDict keys.
+  ParagraphStyle:
+    description: >-
+      Toolbox Word style selected by row function and rank. Heading level and unit
+      indentation rank are separate: a first-rank unit under DMU-Heading3 is still
+      DMU Unit 1. Omit the panel title, so main section headings normally use
+      DMU-Heading2. Use DMU Unit 1 (1st after heading) only immediately after a
+      heading. Rank nested units as DMU Unit 2 through 5, including unmapped parents
+      as units when they carry a unit description. Use DMU Headnote Paragraph for
+      standalone prose and the 1 Line/More Than 1 Line variants for bracketed
+      headnotes. Warn and leave blank for unresolved rank or unsupported depth.
+    enum:
+      - ""
+      - DMU-Heading1
+      - DMU-Heading2
+      - DMU-Heading3
+      - DMU-Heading4
+      - DMU-Heading5
+      - DMU Unit 1 (1st after heading)
+      - DMU Unit 1
+      - DMU Unit 2
+      - DMU Unit 3
+      - DMU Unit 4
+      - DMU Unit 5
+      - DMU Headnote - 1 Line
+      - DMU Headnote - More Than 1 Line
+      - DMU Headnote Paragraph
+      - Run-inHead
+  Label:
+    description: >-
+      Visible unit label, preserving geologic glyphs and qualifiers. May differ
+      from MapUnit. Do not invent font encodings. Blank for unlabeled rows.
+  Symbol:
+    description: >-
+      Symbol-library identifier only if explicitly supplied in the source or job
+      instructions. Do not infer a style-library code from the appearance of a box.
+  AreaFillRGB:
+    description: >-
+      Only an explicitly supplied RGB triplet, formatted 000,000,000 through
+      255,255,255 (comma-separated, zero-padded integers). Leave blank for colors
+      visible only in the scan and warn that measured color sampling or publisher
+      palette reconciliation is required. Do not guess precise RGB values.
+  AreaFillPatternDescription:
+    description: >-
+      Concise description of a clearly visible map-unit area-fill pattern. Do not
+      mistake a schematic stratigraphic lithology pattern for the map's fill symbol;
+      leave blank and warn if their equivalence is unknown.
+  DescriptionSourceID:
+    description: >-
+      Existing DataSources identifier explicitly supplied for this job. Otherwise
+      leave blank and warn that a source record and foreign key must be assigned.
+      A printed citation is not a DataSources ID; retain it in Description.
+  GeoMaterial:
+    description: >-
+      One exact term from the supplied toolbox GeoMaterialDict, selected by its
+      definition using explicit lithologic/genetic evidence. Prefer the most specific
+      supported category, including composite categories where apt; never manufacture
+      a list of terms or use IndentedName. Do not classify from color, symbol, age,
+      name familiarity, or unsupported depositional interpretation. Blank for
+      headings/headnotes or inadequate evidence, with a warning for unclassified
+      units. Summarize the supporting source phrase in notes.
+    vocabulary:
+      path: vocabularies/GeoMaterialDict.csv
+      value_column: GeoMaterial
+      definition_column: Definition
+  GeoMaterialConfidence:
+    description: >-
+      Fit of the selected GeoMaterial to the whole unit, never vision/OCR confidence.
+      High means adequate overall lithologic fit; Medium means a general fit that
+      misses significant minor lithologies; Low means the best available term fits
+      poorly or lithology is insufficiently known for confident assignment. Low is
+      not permission to guess. Blank when GeoMaterial is blank and on headings or
+      headnotes. Explain Medium/Low assignments in notes.
+    enum: ["", High, Medium, Low]
+  DescriptionOfMapUnits_ID:
+    description: >-
+      Database primary key, assigned during reviewed import. Leave blank unless an
+      existing identifier is explicitly supplied. Do not invent globally unique IDs.
+
+special_instructions:
+  - >-
+    Capture all visible DMU content without claiming a validated GeMS database.
+    If the image is only a stratigraphic column or LMU, warn that full descriptions
+    and additional units may exist in a pamphlet, map, or cross section. Never add
+    water, glacier, overlay, or other units that are absent from the source.
+  - >-
+    Distinguish section headings, described parent units, mapped children, and
+    headnotes before assigning hierarchy. Not every age bracket is a lithostratigraphic
+    parent. Omit the panel title; retain substantive headings. Do not invent rows
+    to complete a hierarchy. For uncertain parentage, keep affected rows as siblings
+    at the nearest supported level and warn.
+  - >-
+    Headings may be children of headings, never of units. Units may be children of
+    headings or units. Place independent headnotes at their displayed position as
+    children of the relevant heading, or at root if no heading is shown; give each
+    a unique key. Keep unit-specific notes within Description.
+  - >-
+    Coal beds are separate subordinate unit rows only when individually identified
+    in the source. Keep names and thicknesses; leave MapUnit and Label blank unless
+    assigned. Do not fabricate descriptions. Warn if a bed's inclusion in the DMU
+    rather than a stratigraphic supplement is uncertain.
+  - >-
+    Do not equate ParagraphStyle rank with HierarchyKey segment count. Flag required
+    Glossary definitions for chosen styles and confidence terms. Warn that provisional
+    hierarchy and styles need review against the full DMU, especially for crops.
+  - >-
+    Blank technical IDs are intentional staging values. Warn for unresolved IDs,
+    required unit ages/names, colors, and classifications, grouping repeated issues
+    when useful. Convert empty strings to database nulls where permitted at import;
+    mandatory missing values must be resolved first.
