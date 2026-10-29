@@ -424,6 +424,31 @@ def test_manual_edits_survive_checkpoint_export_repair(tmp_path, profile):
     assert load_review_project(continued.run_dir).rows == [row(profile, "manual")]
 
 
+@pytest.mark.parametrize("csv_damage", ["missing", "stale"])
+def test_checkpoint_exports_refresh_without_new_rows(tmp_path, profile, csv_damage):
+    initial = initial_run(
+        tmp_path, profile, lambda **_: result_for(profile, ["one"], reason="max_output_tokens")
+    )
+    reviewed = [row(profile, "edited")]
+    continued = continue_extraction_job(
+        run_dir=initial.run_dir,
+        max_output_tokens=100,
+        review_state={"rows": reviewed, "original_rows": [row(profile, "one")]},
+        extraction_runner=lambda **_: result_for(profile, []),
+    )
+    corrected = json.loads(continued.output_paths["corrected_json"].read_text("utf-8"))
+    assert corrected["rows"] == reviewed
+    assert corrected["extraction_status"] == "complete"
+    assert corrected["warnings"] == continued.manifest["warnings"]
+    expected_csv = continued.output_paths["corrected_csv"].read_bytes()
+    if csv_damage == "missing":
+        continued.output_paths["corrected_csv"].unlink()
+    else:
+        continued.output_paths["corrected_csv"].write_text("stale", encoding="utf-8")
+    assert load_review_project(continued.run_dir).rows == reviewed
+    assert continued.output_paths["corrected_csv"].read_bytes() == expected_csv
+
+
 def test_missing_image_does_not_prevent_review_but_blocks_continuation(tmp_path, profile):
     initial = initial_run(
         tmp_path, profile, lambda **_: result_for(profile, ["one"], reason="max_output_tokens")

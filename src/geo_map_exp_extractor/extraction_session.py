@@ -164,7 +164,9 @@ def _export(run_dir: Path, state: ExtractionSession) -> None:
             # Preserve damaged review files for inspection/autosave recovery.
             existing = {}
         count = existing.get("session_row_count") if existing is not None else None
-        if existing is None or (isinstance(count, int) and count < len(state.rows)):
+        # Completion metadata can change without new rows. Always regenerate
+        # checkpoint-owned exports, also repairing a missing or stale CSV.
+        if existing is None or (isinstance(count, int) and count <= len(state.rows)):
             reviewed = (
                 existing["rows"] + state.rows[count:]
                 if existing is not None
