@@ -399,27 +399,52 @@ If the same fingerprint already exists in cache, the app reuses cached data unle
 
 ## Run folders and audit trail
 
-Each run creates a timestamped folder under `outputs/` with:
+Each run creates a folder under the selected **Output** directory (`outputs/` by
+default), named with its UTC start time, for example `20261029T143000Z`. A suffix
+such as `-2` avoids name collisions. Keep the entire folder to preserve the project.
+
+Start with `manifest.json` for settings and completion status, `extracted.csv` for
+model-produced rows, and `corrected.csv` for saved reviewer edits. **A CSV file's
+existence does not mean extraction is complete or the rows have been approved.**
+For GUI runs, check `extraction_status` and `warnings` in the manifest; for CLI
+runs, also inspect the raw response status and segment warnings.
 
 ```text
-source_image.<ext>
-processed_api_image.<ext>
-profile.yml
-prompt.txt
-schema.json
-raw_response.json            # omitted for dry run
-extracted.json               # omitted for dry run
-extracted.csv                # omitted for dry run
-corrected.json               # written after review save
-corrected.csv                # written after review save
-feedback.jsonl
-manifest.json
-notes.md
-segments/                    # when segmented mode is enabled
+source_image.<ext>           # copy of the input image
+processed_api_image.<ext>    # prepared image; crops are sent instead in segmented mode
+profile.yml                 # saved profile, with external vocabularies frozen when used
+prompt.txt                  # rendered initial extraction instructions
+schema.json                 # JSON Schema for the initial model output (not all sidecars)
+manifest.json               # run settings, hashes, usage, warnings, and file locations
+raw_response.json           # API response(s), or GUI attempt/pending-response envelope
+extraction_session.json     # GUI extraction checkpoint, including partial progress
+extracted.json              # ordered fields, original rows, notes/warnings, GUI status
+extracted.csv               # same table rows; no status or audit metadata
+corrected.json              # saved review table; also created by continuation
+corrected.csv               # review table for downstream use
+feedback.jsonl              # one review event per line; initially empty
+notes.md                    # reviewer notes; initially a heading
+segments/segment_001.png    # overlapping crops, when a real segmented run is started
 ```
 
-`manifest.json` includes run metadata, hashes, model/detail settings, request fingerprint, fresh-vs-cache mode, usage tokens (when available), estimated cost (when pricing is configured), and output paths.
-It records `model`, `reasoning_effort`, `service_tier`, `image_detail`, and `max_output_tokens` for every run.
+Dry runs save inputs, preparation artifacts, prompt, schema, manifest, and empty
+review files, but no response, checkpoint, extracted/corrected tables, or segment
+crops. CLI runs do not create the GUI checkpoint. Failed runs can leave only the
+artifacts written before the failure. The manifest lists planned output paths,
+so a listed path is not a guarantee that the file exists.
+
+**Save Project** writes the corrected table, review notes, and feedback separately
+from the original extraction. **Load Project** prefers `corrected.json` when
+present and repairs derived extraction exports from a checkpoint when available.
+**Continue Extraction** creates a new sibling folder and records `parent_run_id`;
+the source project remains available. Local crash-recovery snapshots and the
+request cache live outside the run folder.
+
+See the [complete output and audit reference](docs/output_reference.md) for every
+application-defined metadata field, JSON structure, status, hash, file lifecycle,
+cache/recovery location, and troubleshooting procedure. It also explains the
+limits of this audit trail, including positional row identifiers, cumulative
+continuation usage, and what is not captured for exact reproduction.
 
 ## Model selection guidance
 
